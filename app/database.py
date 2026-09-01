@@ -1,3 +1,5 @@
+"""SQLAlchemy ORM-модели и сессия для персистентного хранения истории анализов."""
+
 from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, JSON, Boolean
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
@@ -9,6 +11,8 @@ Base = declarative_base()
 
 
 class AnalysisRecord(Base):
+    """Одна запись истории: результат TrafficAnalyzer.analyze_pcap, сохранённый в БД."""
+
     __tablename__ = "analyses"
     
     id = Column(Integer, primary_key=True, index=True)
@@ -32,6 +36,9 @@ class AnalysisRecord(Base):
 
 
 class BaselinePattern(Base):
+    """Схема для хранения baseline-паттернов трафика. Таблица создаётся, но
+    ничто в приложении пока не записывает и не читает из неё."""
+
     __tablename__ = "baseline_patterns"
     
     id = Column(Integer, primary_key=True, index=True)
@@ -52,10 +59,12 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
 def init_db():
+    """Создать таблицы, если они ещё не существуют. Вызывается при старте приложения."""
     Base.metadata.create_all(bind=engine)
 
 
 def get_db():
+    """FastAPI-зависимость: выдаёт сессию БД и закрывает её после запроса."""
     db = SessionLocal()
     try:
         yield db

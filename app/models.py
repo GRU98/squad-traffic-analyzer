@@ -1,3 +1,5 @@
+"""Pydantic-модели: пакеты, статистика трафика, аномалии и результат анализа."""
+
 from pydantic import BaseModel, Field
 from typing import List, Dict, Optional, Any
 from datetime import datetime
@@ -5,6 +7,8 @@ from enum import Enum
 
 
 class AnomalyType(str, Enum):
+    """Категории аномалий, которые умеет распознавать AnomalyDetector."""
+
     HIGH_PPS = "high_pps"
     HIGH_BPS = "high_bps"
     SUSPICIOUS_PATTERN = "suspicious_pattern"
@@ -16,6 +20,8 @@ class AnomalyType(str, Enum):
 
 
 class AnomalyDetection(BaseModel):
+    """Одна обнаруженная аномалия с её степенью серьёзности и источником."""
+
     type: AnomalyType
     severity: float = Field(..., ge=0.0, le=1.0)
     description: str
@@ -25,6 +31,8 @@ class AnomalyDetection(BaseModel):
 
 
 class TrafficStats(BaseModel):
+    """Агрегированная статистика по одному разобранному PCAP-файлу."""
+
     total_packets: int = 0
     total_bytes: int = 0
     unique_ips: int = 0
@@ -45,6 +53,8 @@ class TrafficStats(BaseModel):
 
 
 class AnalysisResult(BaseModel):
+    """Итог одного запуска TrafficAnalyzer.analyze_pcap — ответ API."""
+
     analysis_id: str
     timestamp: datetime
     duration_seconds: float
@@ -59,6 +69,8 @@ class AnalysisResult(BaseModel):
 
 
 class PacketInfo(BaseModel):
+    """Нормализованные поля одного пакета, извлечённые PcapParser."""
+
     timestamp: float
     src_ip: str
     dst_ip: str

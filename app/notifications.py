@@ -1,3 +1,5 @@
+"""Рассылка алертов по каналам Telegram / Webhook / Email на основе результата анализа."""
+
 import logging
 import aiohttp
 import smtplib
@@ -15,7 +17,13 @@ class NotificationService:
     """Сервис уведомлений об аномалиях"""
 
     async def send_alert(self, result: AnalysisResult):
-        """Отправить уведомление по всем включённым каналам"""
+        """Отправить уведомление по всем включённым каналам.
+
+        Пропускает отправку, если is_under_attack не выставлен и risk_score < 0.5.
+        Каналы (`tasks`) вызываются последовательно, не через asyncio.gather —
+        сбой или задержка одного канала не мешает следующему, но и не
+        ускоряет рассылку параллелизмом.
+        """
         if not result.is_under_attack and result.risk_score < 0.5:
             return
 
@@ -36,6 +44,7 @@ class NotificationService:
                 logger.error(f"Notification failed: {e}")
 
     def _build_message(self, result: AnalysisResult) -> str:
+        """Собрать текстовое сообщение (RU) для Telegram/Email: сводка + топ-5 аномалий + топ-3 рекомендации."""
         status = "🚨 АТАКА" if result.is_under_attack else "⚠️ АНОМАЛИЯ"
         lines = [
             f"{status} | Squad Traffic Analyzer",
@@ -55,6 +64,7 @@ class NotificationService:
         return "\n".join(lines)
 
     async def _send_telegram(self, message: str):
+        """Отправить message через Telegram Bot API в TELEGRAM_CHAT_ID."""
         url = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/sendMessage"
         payload = {
             "chat_id": settings.TELEGRAM_CHAT_ID,
@@ -69,6 +79,7 @@ class NotificationService:
                     logger.error(f"Telegram error: {resp.status}")
 
     async def _send_webhook(self, result: AnalysisResult):
+        """POST-нуть структурированный JSON о найденных аномалиях на WEBHOOK_URL."""
         payload = {
             "event": "anomaly_detected",
             "risk_score": result.risk_score,
@@ -89,6 +100,7 @@ class NotificationService:
                     logger.error(f"Webhook error: {resp.status}")
 
     async def _send_email(self, message: str, result: AnalysisResult):
+        """Отправить message по SMTP (STARTTLS) с EMAIL_FROM на EMAIL_TO."""
         msg = MIMEMultipart()
         msg["From"] = settings.EMAIL_FROM
         msg["To"] = settings.EMAIL_TO
