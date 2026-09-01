@@ -90,6 +90,7 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = True
+        extra = "ignore"  # .env also carries docker-compose-only vars (e.g. DB_PASSWORD)
 
 
 settings = Settings()

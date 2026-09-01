@@ -1,5 +1,7 @@
 """SQLAlchemy ORM-модели и сессия для персистентного хранения истории анализов."""
 
+import os
+
 from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, JSON, Boolean
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
@@ -55,6 +57,13 @@ class BaselinePattern(Base):
 
 
 _connect_args = {"check_same_thread": False} if settings.DATABASE_URL.startswith("sqlite") else {}
+
+if settings.DATABASE_URL.startswith("sqlite:///"):
+    _db_path = settings.DATABASE_URL.removeprefix("sqlite:///")
+    _db_dir = os.path.dirname(_db_path)
+    if _db_dir:
+        os.makedirs(_db_dir, exist_ok=True)
+
 engine = create_engine(settings.DATABASE_URL, connect_args=_connect_args)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 

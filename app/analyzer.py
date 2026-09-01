@@ -110,7 +110,8 @@ class TrafficAnalyzer:
         
         for anomaly in anomalies:
             if anomaly.type.value == "ddos_attack":
-                recommendations.append(f"Заблокировать IP {anomaly.source_ip} в firewall")
+                if anomaly.source_ip:
+                    recommendations.append(f"Заблокировать IP {anomaly.source_ip} в firewall")
                 recommendations.append("Включить rate limiting на уровне сети")
                 
             elif anomaly.type.value == "port_scan":
@@ -143,7 +144,7 @@ class TrafficAnalyzer:
 
             for anomaly in result.anomalies:
                 if anomaly.severity > 0.5:
-                    self.redis_client.store_anomaly_alert(anomaly.model_dump())
+                    self.redis_client.store_anomaly_alert(anomaly.model_dump(mode="json"))
         except Exception as e:
             logger.error(f"Failed to save to Redis: {e}")
 
@@ -165,7 +166,7 @@ class TrafficAnalyzer:
                 risk_score=result.risk_score,
                 is_under_attack=result.is_under_attack,
                 stats_json=result.stats.model_dump(),
-                anomalies_json=[a.model_dump() for a in result.anomalies],
+                anomalies_json=[a.model_dump(mode="json") for a in result.anomalies],
                 recommendations_json=result.recommendations
             )
             
