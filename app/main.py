@@ -1,3 +1,5 @@
+"""FastAPI-приложение: HTTP-эндпоинты для анализа трафика Squad-сервера, история и статистика."""
+
 from fastapi import FastAPI, UploadFile, File, HTTPException, Depends
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -40,6 +42,7 @@ app.add_middleware(
 
 @app.middleware("http")
 async def api_key_middleware(request, call_next):
+    """Требовать заголовок X-API-Key (или query-параметр api_key), кроме путей из skip_paths."""
     if settings.API_KEY_ENABLED:
         skip_paths = ["/health", "/docs", "/redoc", "/openapi.json"]
         if request.url.path not in skip_paths:

@@ -98,7 +98,7 @@ Squad Server (UDP 7787 / 27165)
 |---------|-------------|
 | 🔍 **PCAP Parsing** | Full packet parsing via Scapy — IP, UDP, TCP, ICMP, Raw payload |
 | 📊 **Traffic Stats** | PPS, BPS, unique IPs, protocol distribution, top talkers |
-| 🚨 **Heuristic Detection** | 5 rule types: High PPS/BPS, Port Scan, SYN Flood, DDoS, Malformed |
+| 🚨 **Heuristic Detection** | 5 checks, 6 anomaly types: High PPS, High BPS, Port Scan, Suspicious Pattern (SYN flood / tiny packets), DDoS, Malformed |
 | 🤖 **ML Detection** | Isolation Forest — unsupervised, no labeled data required |
 | 🎯 **Risk Scoring** | Composite 0.0–1.0 score with attack flag |
 | ⚡ **3 Analysis Modes** | `manual`, `continuous` (interval), `scheduled` (cron) |
@@ -137,8 +137,6 @@ traffic_analyzer/
 ├── scripts/
 │   └── start.sh                # Unified launch script (6 commands)
 │
-├── docs/                       # Additional documentation
-│
 ├── requirements.txt            # Python dependencies
 ├── .env.example                # Configuration template
 ├── .gitignore
@@ -171,7 +169,7 @@ traffic_analyzer/
 
 ```bash
 git clone https://github.com/your-org/squad-traffic-analyzer.git
-cd squad-traffic-analyzer/traffic_analyzer
+cd squad-traffic-analyzer
 
 cp .env.example .env
 nano .env
@@ -239,12 +237,18 @@ Runs the full stack: **App + Redis + PostgreSQL + Nginx**.
 ```bash
 ./scripts/start.sh docker
 # API:     http://localhost:8000
-# Via Nginx: http://localhost:80 (or https with SSL configured)
+# Nginx:   requires SSL certs at docker/nginx/ssl/ — see SSL section below
 ```
+
+> `docker/nginx/nginx.conf` always redirects port 80 to HTTPS and the HTTPS
+> server block requires `docker/nginx/ssl/cert.pem` + `key.pem` to exist. The
+> nginx container will fail to start without them — plain HTTP-only access via
+> Nginx is not supported as shipped.
 
 - Requires `.env` to exist (auto-prompted if not)
 - Creates `data/`, `pcap_captures/`, `logs/nginx/` directories
-- All data persisted in Docker named volumes
+- `data/`, `pcap_captures/`, and `logs/` are bind-mounted from the host; only
+  Redis and PostgreSQL data live in named Docker volumes (`redis-data`, `postgres-data`)
 
 #### `stop` — Stop everything
 
@@ -329,7 +333,7 @@ Swagger UI: `http://your-server:8000/docs` (disabled in production mode)
 | `POST` | `/analyze/path` | ✓ | Analyze PCAP file by server path |
 | `POST` | `/capture/start` | ✓ | Start tcpdump capture (async) |
 | `POST` | `/capture/analyze-latest` | ✓ | Analyze most recent PCAP file |
-| `GET` | `/history` | ✓ | Paginated analysis history |
+| `GET` | `/history` | ✓ | Analysis history (`limit`, most recent first) |
 | `GET` | `/stats/summary` | ✓ | Aggregated DB statistics |
 | `GET` | `/stats/realtime` | ✓ | Live stats from Redis |
 | `DELETE` | `/cleanup` | ✓ | Delete old data + PCAP files |
@@ -343,22 +347,15 @@ Swagger UI: `http://your-server:8000/docs` (disabled in production mode)
 curl http://localhost:8000/health
 
 # Analyze uploaded PCAP
-curl -X POST http://localhost:8000/analyze/upload \
+# server_ip / game_port / query_port are query parameters, NOT form fields —
+# only `file` goes in the multipart body.
+curl -X POST "http://localhost:8000/analyze/upload?server_ip=1.2.3.4&game_port=7787" \
   -H "X-API-Key: your_key" \
-  -F "file=@/path/to/capture.pcap" \
-  -F "server_ip=1.2.3.4" \
-  -F "game_port=7787"
+  -F "file=@/path/to/capture.pcap"
 
-# Analyze by path (file already on server)
-curl -X POST http://localhost:8000/analyze/path \
-  -H "X-API-Key: your_key" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "pcap_path": "/opt/squad/pcap_captures/capture.pcap",
-    "server_ip": "1.2.3.4",
-    "game_port": 7787,
-    "query_port": 27165
-  }'
+# Analyze by path (file already on server) — all fields are query parameters
+curl -X POST "http://localhost:8000/analyze/path?pcap_path=/opt/squad/pcap_captures/capture.pcap&server_ip=1.2.3.4&game_port=7787&query_port=27165" \
+  -H "X-API-Key: your_key"
 
 # Start tcpdump capture for 60 seconds
 curl -X POST "http://localhost:8000/capture/start?duration=60&interface=ens6" \
@@ -369,7 +366,7 @@ curl -X POST http://localhost:8000/capture/analyze-latest \
   -H "X-API-Key: your_key"
 
 # Get history (last 20)
-curl "http://localhost:8000/history?limit=20&offset=0" \
+curl "http://localhost:8000/history?limit=20" \
   -H "X-API-Key: your_key"
 
 # Summary stats
@@ -381,6 +378,10 @@ curl -X DELETE http://localhost:8000/cleanup -H "X-API-Key: your_key"
 
 #### Full Response Schema
 
+> Field names below match `app/models.py` exactly. Note that `recommendations`
+> strings are always generated in Russian (see `analyzer.py::_generate_recommendations`),
+> regardless of which language section of this README you're reading.
+
 ```json
 {
   "analysis_id": "3f8a1b2c-...",
@@ -389,10 +390,9 @@ curl -X DELETE http://localhost:8000/cleanup -H "X-API-Key: your_key"
   "stats": {
     "total_packets": 85432,
     "total_bytes": 52428800,
-    "duration_seconds": 60.0,
+    "unique_ips": 312,
     "packets_per_second": 1423.9,
     "bytes_per_second": 873813.3,
-    "unique_ips": 312,
     "udp_packets": 82100,
     "tcp_packets": 3200,
     "icmp_packets": 132,
@@ -400,39 +400,43 @@ curl -X DELETE http://localhost:8000/cleanup -H "X-API-Key: your_key"
     "game_port_packets": 79400,
     "query_port_packets": 2700,
     "top_talkers": [
-      {"ip": "5.6.7.8", "packets": 45000, "bytes": 27000000, "percent": 52.7}
+      {"ip": "5.6.7.8", "packets": 45000}
     ],
-    "protocol_distribution": {"UDP": 96, "TCP": 4},
-    "packet_size_distribution": {"small": 12000, "medium": 60000, "large": 13432}
+    "protocol_distribution": {"UDP": 82100, "TCP": 3200, "ICMP": 132},
+    "packet_size_distribution": {"0-64": 12000, "64-128": 30000, "128-256": 20000, "256-512": 10000, "512-1024": 8432, "1024-1500": 5000, "1500+": 0}
   },
   "anomalies": [
     {
-      "type": "ddos_single_source",
+      "type": "ddos_attack",
       "severity": 0.91,
-      "description": "Single IP 5.6.7.8 responsible for 52.7% of all traffic",
+      "description": "Возможная DDoS атака с 5.6.7.8: 52.7% трафика (45000 пакетов)",
       "source_ip": "5.6.7.8",
       "timestamp": "2026-09-01T10:00:05.000000",
-      "details": {"packets": 45000, "percent": 52.7}
+      "details": {"packets": 45000, "percentage": 52.7}
     },
     {
       "type": "high_pps",
       "severity": 0.72,
-      "description": "Traffic rate 1423 PPS exceeds threshold 1000 PPS",
+      "description": "Высокий PPS: 1423.90 пакетов/сек",
       "source_ip": null,
       "timestamp": "2026-09-01T10:00:00.000000",
-      "details": {}
+      "details": {"pps": 1423.9, "threshold": 10000}
     }
   ],
   "risk_score": 0.87,
   "is_under_attack": true,
   "recommendations": [
-    "Block IP 5.6.7.8 immediately — responsible for >50% traffic",
-    "Enable rate limiting on UDP port 7787",
-    "Contact your hosting provider about DDoS mitigation",
-    "Consider enabling IP allowlist for known players"
+    "⚠️ КРИТИЧНО: Сервер под атакой! Рекомендуется немедленная проверка.",
+    "Заблокировать IP 5.6.7.8 в firewall",
+    "Включить rate limiting на уровне сети",
+    "Проверить настройки DDoS защиты",
+    "Рассмотреть использование CloudFlare/Qrator"
   ]
 }
 ```
+
+`recommendations` is deduplicated with `list(set(...))` before being returned, so its
+order is not guaranteed to match the order anomalies were processed in.
 
 ---
 
@@ -440,35 +444,48 @@ curl -X DELETE http://localhost:8000/cleanup -H "X-API-Key: your_key"
 
 #### Heuristic Rules
 
+`type` below is the exact `AnomalyType` enum value returned by the API.
+
 | Type | Trigger | Severity |
 |------|---------|----------|
-| `high_pps` | PPS > `ANOMALY_THRESHOLD_PPS` (default: 10,000) | 0.6–0.9 |
-| `high_bps` | BPS > `ANOMALY_THRESHOLD_BPS` (default: 100 MB/s) | 0.6–0.9 |
-| `port_scan` | Single IP hits > N unique ports | 0.7–1.0 |
-| `ddos_single_source` | One IP > 30% of total traffic | 0.8–1.0 |
-| `syn_flood` | High TCP SYN ratio with no ACK | 0.75–1.0 |
-| `malformed_packet` | Packets with invalid headers/size | 0.5–0.8 |
+| `high_pps` | PPS > `ANOMALY_THRESHOLD_PPS` (default: 10,000) | up to 1.0 |
+| `high_bps` | BPS > `ANOMALY_THRESHOLD_BPS` (default: 100 MB/s) | up to 1.0 |
+| `port_scan` | Single IP hits > 20 unique ports (hardcoded — `ANOMALY_THRESHOLD_PORT_SCAN` is defined but not read by the detector) | up to 1.0 |
+| `suspicious_pattern` | SYN flood (>100 SYN packets with no ACK from one IP) or a flood of >500 packets under 64 bytes from one IP | up to 1.0 |
+| `ddos_attack` | One of the top-10 IPs by packet count sends >30% of traffic (and >1000 packets), or unique IP count exceeds `ANOMALY_THRESHOLD_CONNECTIONS` while PPS > 1000 | up to 1.0 |
+| `malformed_packet` | >50 UDP packets on the game/query port with length <20 or >1500 bytes | up to 1.0 |
+| `ml_detected` | Isolation Forest flags a 1-second window as an outlier (see below) | up to 1.0 |
+
+There is no dedicated `syn_flood` or `ddos_single_source` type — both cases above are
+reported under `suspicious_pattern` / `ddos_attack`, distinguishable only by `description`.
 
 #### ML Detection (Isolation Forest)
 
-Features extracted per IP per time window:
-- Packet count and byte volume
-- Unique destination ports
-- Packet size variance
-- Protocol mix ratio
-- Inter-arrival time statistics
+Skipped entirely if the capture has fewer than 100 packets. Features are extracted
+per **1-second time window** (not per IP):
+- Packet count in the window
+- Total bytes in the window
+- Number of unique source IPs in the window
+- Average packet size in the window
 
 Anomaly score threshold controlled by `ML_MODEL_CONTAMINATION` (default: `0.1` = 10% expected anomalies).
+The model is retrained from scratch on every analysis — there is no persisted baseline.
+
+> **Known issue:** `_detect_ml_anomalies` indexes `packets[i]` using indices produced
+> against the per-window feature matrix, so once a capture spans more than 100
+> one-second windows the reported `anomaly_percentage` and `top_sources` no longer
+> correspond to the actual anomalous packets. Tracked as a GitHub issue.
 
 #### Risk Score Calculation
 
 ```
 risk_score = (max_severity × 0.5) + (avg_severity × 0.3) + (anomaly_count_factor × 0.2)
 ```
+`is_under_attack` is `true` when `risk_score > 0.7` (see `analyzer.py::analyze_pcap`).
+
 - `0.0 – 0.3` — Normal traffic
-- `0.3 – 0.6` — Suspicious, monitor
-- `0.6 – 0.8` — High risk, investigate
-- `0.8 – 1.0` — Under attack, act immediately
+- `0.3 – 0.7` — Suspicious, monitor
+- `0.7 – 1.0` — Under attack, act immediately
 
 ---
 
@@ -596,7 +613,10 @@ WEBHOOK_URL=https://your-service.com/hooks/squad-alerts
 
 Alerts are sent when `risk_score > 0.5` or `is_under_attack = true`.
 
-**Telegram message example:**
+Message text (built by `notifications.py::_build_message`) is always Russian,
+regardless of which README language section you're reading, and shows at most
+the top 5 anomalies and top 3 recommendations:
+
 ```
 🚨 АТАКА | Squad Traffic Analyzer
 Risk Score: 0.91
@@ -605,14 +625,14 @@ Risk Score: 0.91
 PPS: 1424
 Аномалий: 3
 
-• [0.91] IP 5.6.7.8 — 52.7% всего трафика
-• [0.72] Превышен порог PPS: 1424 > 1000
-• [0.68] Port scan с 10.0.0.5: 34 порта
+• [0.91] Возможная DDoS атака с 5.6.7.8: 52.7% трафика (45000 пакетов)
+• [0.72] Высокий PPS: 1423.90 пакетов/сек
+• [0.34] Сканирование портов с 10.0.0.5: 34 портов
 
 Рекомендации:
-→ Заблокировать IP 5.6.7.8
-→ Включить rate limiting на UDP 7787
-→ Связаться с провайдером
+→ ⚠️ КРИТИЧНО: Сервер под атакой! Рекомендуется немедленная проверка.
+→ Заблокировать IP 5.6.7.8 в firewall
+→ Включить rate limiting на уровне сети
 ```
 
 ---
@@ -685,7 +705,7 @@ cp /etc/letsencrypt/live/yourdomain.com/privkey.pem docker/nginx/ssl/key.pem
 
 | Problem | Cause | Fix |
 |---------|-------|-----|
-| `500 Internal Server Error /health` | Missing `datetime` import or Redis down | Check logs: `./scripts/start.sh logs` |
+| `"redis": "unavailable"` in `/health` | Redis down, wrong `REDIS_HOST`, or bad `REDIS_PASSWORD` | `redis-cli -h $REDIS_HOST ping`; check `./scripts/start.sh logs` |
 | `Address already in use` | Old process still running | `./scripts/start.sh stop` |
 | `0 packets captured` | Wrong interface or Squad not running | `ip a` → find interface; `ss -tulpn \| grep 7787` |
 | `tcpdump: Operation not permitted` | No raw socket permission | `setcap cap_net_raw,cap_net_admin=eip /usr/bin/tcpdump` |
@@ -785,7 +805,7 @@ Squad Server (UDP 7787 / 27165)
 |-------------|----------|
 | 🔍 **Парсинг PCAP** | Полный парсинг через Scapy — IP, UDP, TCP, ICMP, Raw payload |
 | 📊 **Статистика трафика** | PPS, BPS, уникальные IP, распределение протоколов, топ источников |
-| 🚨 **Эвристики** | 6 типов правил: High PPS/BPS, Port Scan, SYN Flood, DDoS, Malformed |
+| 🚨 **Эвристики** | 5 проверок, 6 типов аномалий: High PPS, High BPS, Port Scan, Suspicious Pattern (SYN flood / мелкие пакеты), DDoS, Malformed |
 | 🤖 **ML детекция** | Isolation Forest — без обучающей разметки |
 | 🎯 **Risk Score** | Комплексная оценка 0.0–1.0 + флаг атаки |
 | ⚡ **3 режима** | `manual`, `continuous` (интервал), `scheduled` (cron) |
@@ -824,8 +844,6 @@ traffic_analyzer/
 ├── scripts/
 │   └── start.sh                # Единый скрипт запуска (6 команд)
 │
-├── docs/                       # Дополнительная документация
-│
 ├── requirements.txt            # Python зависимости
 ├── .env.example                # Шаблон конфигурации
 ├── .gitignore
@@ -856,7 +874,7 @@ traffic_analyzer/
 
 ```bash
 git clone https://github.com/your-org/squad-traffic-analyzer.git
-cd squad-traffic-analyzer/traffic_analyzer
+cd squad-traffic-analyzer
 
 cp .env.example .env
 nano .env
@@ -923,13 +941,18 @@ sudo ./scripts/start.sh prod
 
 ```bash
 ./scripts/start.sh docker
-# API:       http://localhost:8000
-# Через Nginx: http://localhost (или https с настроенным SSL)
+# API:    http://localhost:8000
+# Nginx:  требует SSL-сертификаты в docker/nginx/ssl/ — см. раздел SSL ниже
 ```
+
+> `docker/nginx/nginx.conf` всегда редиректит порт 80 на HTTPS, а HTTPS-блок
+> требует наличия `docker/nginx/ssl/cert.pem` и `key.pem`. Без них контейнер
+> nginx не запустится — доступ только по HTTP «из коробки» не поддерживается.
 
 - Требует наличия `.env` (подсказывает если нет)
 - Создаёт все нужные директории
-- Данные хранятся в именованных Docker volumes
+- `data/`, `pcap_captures/` и `logs/` монтируются с хоста; в именованных Docker
+  volumes (`redis-data`, `postgres-data`) хранятся только Redis и PostgreSQL
 
 #### `stop` — Остановить всё
 
@@ -1013,7 +1036,7 @@ Swagger UI: `http://твой-сервер:8000/docs` (отключён в produc
 | `POST` | `/analyze/path` | ✓ | Анализировать PCAP по пути на сервере |
 | `POST` | `/capture/start` | ✓ | Запустить tcpdump захват (async) |
 | `POST` | `/capture/analyze-latest` | ✓ | Анализировать последний PCAP |
-| `GET` | `/history` | ✓ | История анализов с пагинацией |
+| `GET` | `/history` | ✓ | История анализов (`limit`, новые первыми) |
 | `GET` | `/stats/summary` | ✓ | Агрегированная статистика из БД |
 | `GET` | `/stats/realtime` | ✓ | Real-time данные из Redis |
 | `DELETE` | `/cleanup` | ✓ | Удалить старые данные и PCAP файлы |
@@ -1027,21 +1050,14 @@ Swagger UI: `http://твой-сервер:8000/docs` (отключён в produc
 curl http://localhost:8000/health
 
 # Загрузить PCAP файл для анализа
-curl -X POST http://localhost:8000/analyze/upload \
+# server_ip / game_port / query_port — query-параметры, а НЕ поля multipart-формы
+curl -X POST "http://localhost:8000/analyze/upload?server_ip=1.2.3.4" \
   -H "X-API-Key: your_key" \
-  -F "file=@/path/to/capture.pcap" \
-  -F "server_ip=1.2.3.4"
+  -F "file=@/path/to/capture.pcap"
 
-# Анализировать файл по пути на сервере
-curl -X POST http://localhost:8000/analyze/path \
-  -H "X-API-Key: your_key" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "pcap_path": "/opt/squad/pcap_captures/capture.pcap",
-    "server_ip": "1.2.3.4",
-    "game_port": 7787,
-    "query_port": 27165
-  }'
+# Анализировать файл по пути на сервере — все параметры передаются в query-строке
+curl -X POST "http://localhost:8000/analyze/path?pcap_path=/opt/squad/pcap_captures/capture.pcap&server_ip=1.2.3.4&game_port=7787&query_port=27165" \
+  -H "X-API-Key: your_key"
 
 # Запустить захват на 60 секунд
 curl -X POST "http://localhost:8000/capture/start?duration=60&interface=ens6" \
@@ -1052,7 +1068,7 @@ curl -X POST http://localhost:8000/capture/analyze-latest \
   -H "X-API-Key: your_key"
 
 # История (последние 20)
-curl "http://localhost:8000/history?limit=20&offset=0" \
+curl "http://localhost:8000/history?limit=20" \
   -H "X-API-Key: your_key"
 
 # Сводная статистика
@@ -1152,27 +1168,50 @@ WEBHOOK_URL=https://your-service.com/hooks/squad-alerts
 
 #### Эвристические правила
 
+`Тип` — точное значение enum `AnomalyType`, которое возвращает API.
+
 | Тип | Триггер | Severity |
 |-----|---------|----------|
-| `high_pps` | PPS > порога (default: 10 000) | 0.6–0.9 |
-| `high_bps` | BPS > порога (default: 100 МБ/с) | 0.6–0.9 |
-| `port_scan` | Один IP → N уникальных портов | 0.7–1.0 |
-| `ddos_single_source` | Один IP > 30% всего трафика | 0.8–1.0 |
-| `syn_flood` | Высокий TCP SYN без ACK | 0.75–1.0 |
-| `malformed_packet` | Пакеты с битыми заголовками | 0.5–0.8 |
+| `high_pps` | PPS > `ANOMALY_THRESHOLD_PPS` (default: 10 000) | до 1.0 |
+| `high_bps` | BPS > `ANOMALY_THRESHOLD_BPS` (default: 100 МБ/с) | до 1.0 |
+| `port_scan` | Один IP → более 20 уникальных портов (порог захардкожен — `ANOMALY_THRESHOLD_PORT_SCAN` задан в настройках, но детектором не читается) | до 1.0 |
+| `suspicious_pattern` | SYN flood (>100 SYN-пакетов без ACK с одного IP) либо поток из >500 пакетов короче 64 байт с одного IP | до 1.0 |
+| `ddos_attack` | Один из топ-10 IP по числу пакетов даёт >30% трафика (и >1000 пакетов), либо число уникальных IP превышает `ANOMALY_THRESHOLD_CONNECTIONS` при PPS > 1000 | до 1.0 |
+| `malformed_packet` | >50 UDP-пакетов на игровом/query-порту с длиной <20 или >1500 байт | до 1.0 |
+| `ml_detected` | Isolation Forest помечает 1-секундное окно как выброс (см. ниже) | до 1.0 |
+
+Отдельных типов `syn_flood` или `ddos_single_source` не существует — оба случая
+попадают в `suspicious_pattern` / `ddos_attack`, различить их можно только по `description`.
+
+#### ML-детекция (Isolation Forest)
+
+Полностью пропускается, если в захвате меньше 100 пакетов. Признаки считаются
+по **1-секундным окнам** (не по IP):
+- Число пакетов в окне
+- Суммарные байты в окне
+- Число уникальных src IP в окне
+- Средний размер пакета в окне
+
+Порог задаётся `ML_MODEL_CONTAMINATION` (default: `0.1` = ожидается 10% аномалий).
+Модель переобучается заново на каждый анализ — сохранённого baseline между запусками нет.
+
+> **Известная проблема:** `_detect_ml_anomalies` использует индексы из матрицы
+> признаков (одна строка на окно) как индексы в списке пакетов (`packets[i]`).
+> Как только захват превышает 100 окон, `anomaly_percentage` и `top_sources`
+> перестают соответствовать реальным аномальным пакетам. Заведён как issue на GitHub.
 
 #### Оценка риска
 
 ```
 risk_score = (max_severity × 0.5) + (avg_severity × 0.3) + (count_factor × 0.2)
 ```
+`is_under_attack = true`, когда `risk_score > 0.7` (см. `analyzer.py::analyze_pcap`).
 
 | Диапазон | Интерпретация |
 |----------|---------------|
 | `0.0 – 0.3` | Нормальный трафик |
-| `0.3 – 0.6` | Подозрительно, наблюдай |
-| `0.6 – 0.8` | Высокий риск, расследуй |
-| `0.8 – 1.0` | Под атакой, действуй немедленно |
+| `0.3 – 0.7` | Подозрительно, наблюдай |
+| `0.7 – 1.0` | Под атакой, действуй немедленно |
 
 ---
 
@@ -1180,23 +1219,25 @@ risk_score = (max_severity × 0.5) + (avg_severity × 0.3) + (count_factor × 0.
 
 Алерты отправляются при `risk_score > 0.5` или `is_under_attack = true`.
 
-**Пример Telegram сообщения:**
+Текст сообщения (`notifications.py::_build_message`) всегда на русском и
+показывает не более 5 аномалий и 3 рекомендаций:
+
 ```
 🚨 АТАКА | Squad Traffic Analyzer
 Risk Score: 0.91
-Пакетов: 85 432
+Пакетов: 85432
 Уникальных IP: 312
-PPS: 1 424
+PPS: 1424
 Аномалий: 3
 
-• [0.91] IP 5.6.7.8 — 52.7% всего трафика
-• [0.72] Превышен порог PPS: 1424 > 10000
-• [0.68] Port scan с 10.0.0.5: 34 порта
+• [0.91] Возможная DDoS атака с 5.6.7.8: 52.7% трафика (45000 пакетов)
+• [0.72] Высокий PPS: 1423.90 пакетов/сек
+• [0.34] Сканирование портов с 10.0.0.5: 34 портов
 
 Рекомендации:
-→ Заблокировать IP 5.6.7.8
-→ Включить rate limiting UDP 7787
-→ Связаться с хостинг-провайдером
+→ ⚠️ КРИТИЧНО: Сервер под атакой! Рекомендуется немедленная проверка.
+→ Заблокировать IP 5.6.7.8 в firewall
+→ Включить rate limiting на уровне сети
 ```
 
 ---
@@ -1267,7 +1308,7 @@ cp /etc/letsencrypt/live/yourdomain.com/privkey.pem docker/nginx/ssl/key.pem
 
 | Проблема | Причина | Решение |
 |----------|---------|---------|
-| `500 Internal Server Error` | Redis не запущен | `systemctl start redis-server` |
+| `"redis": "unavailable"` в `/health` | Redis не запущен, неверный `REDIS_HOST` или `REDIS_PASSWORD` | `redis-cli -h $REDIS_HOST ping`; `systemctl start redis-server` |
 | `Address already in use` | Старый процесс жив | `./scripts/start.sh stop` |
 | `0 packets captured` | Неверный интерфейс / Squad не запущен | `ip a` → `ss -tulpn \| grep 7787` |
 | `Operation not permitted` | Нет прав на raw socket | `setcap cap_net_raw,cap_net_admin=eip /usr/bin/tcpdump` |
