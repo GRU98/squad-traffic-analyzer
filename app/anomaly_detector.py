@@ -1,3 +1,5 @@
+"""Детекция аномалий в трафике: эвристические правила + Isolation Forest (ML)."""
+
 from typing import List, Dict, Tuple
 from collections import defaultdict, Counter
 from datetime import datetime, timedelta
@@ -12,18 +14,33 @@ logger = logging.getLogger(__name__)
 
 
 class AnomalyDetector:
+    """Прогоняет пакеты и статистику через набор эвристик и ML-модель.
+
+    ML-модель (IsolationForest) переобучается заново на каждый вызов
+    detect_anomalies — baseline между анализами не сохраняется.
+    """
+
     def __init__(self):
         self.ml_model = IsolationForest(
             contamination=settings.ML_MODEL_CONTAMINATION,
             random_state=42
         )
         self.baseline_trained = False
-        
+
     def detect_anomalies(
         self,
         packets: List[PacketInfo],
         stats: TrafficStats
     ) -> List[AnomalyDetection]:
+        """Запустить все детекторы и вернуть найденные аномалии по убыванию severity.
+
+        Args:
+            packets: пакеты одного PCAP-файла (из PcapParser.parse_pcap).
+            stats: агрегированная статистика того же файла.
+
+        Returns:
+            Список AnomalyDetection, отсортированный по severity (убывание).
+        """
         anomalies = []
         
         anomalies.extend(self._detect_high_traffic(stats))
@@ -40,6 +57,7 @@ class AnomalyDetector:
         return anomalies
     
     def _detect_high_traffic(self, stats: TrafficStats) -> List[AnomalyDetection]:
+        """Сравнить PPS/BPS с порогами из настроек (HIGH_PPS / HIGH_BPS)."""
         anomalies = []
         
         if stats.packets_per_second > settings.ANOMALY_THRESHOLD_PPS:
@@ -65,8 +83,12 @@ class AnomalyDetector:
         return anomalies
     
     def _detect_port_scan(self, packets: List[PacketInfo]) -> List[AnomalyDetection]:
+        """Флагнуть IP, обратившиеся более чем к 20 уникальным dst-портам.
+
+        Порог захардкожен здесь и не связан с settings.ANOMALY_THRESHOLD_PORT_SCAN.
+        """
         anomalies = []
-        
+
         ip_ports = defaultdict(set)
         
         for pkt in packets:
@@ -88,8 +110,13 @@ class AnomalyDetector:
         return anomalies
     
     def _detect_suspicious_patterns(self, packets: List[PacketInfo]) -> List[AnomalyDetection]:
+        """Обнаружить SYN-флуд (SYN без ACK) и потоки мелких (<64 байт) пакетов.
+
+        Оба случая репортятся как AnomalyType.SUSPICIOUS_PATTERN — отдельного
+        типа для SYN flood в модели нет, разница видна только в description.
+        """
         anomalies = []
-        
+
         syn_flood_ips = defaultdict(int)
         
         for pkt in packets:
@@ -128,8 +155,12 @@ class AnomalyDetector:
         return anomalies
     
     def _detect_ddos_patterns(self, packets: List[PacketInfo], stats: TrafficStats) -> List[AnomalyDetection]:
+        """Найти DDoS-паттерны: один IP с >30% трафика, либо много IP при высоком PPS.
+
+        Проверяет только 10 самых активных отправителей (Counter.most_common(10)).
+        """
         anomalies = []
-        
+
         ip_packet_count = Counter(pkt.src_ip for pkt in packets)
         
         total_packets = len(packets)
@@ -161,8 +192,9 @@ class AnomalyDetector:
         return anomalies
     
     def _detect_malformed_packets(self, packets: List[PacketInfo]) -> List[AnomalyDetection]:
+        """Посчитать UDP-пакеты на игровом/query-порту с длиной вне диапазона 20–1500 байт."""
         anomalies = []
-        
+
         malformed_count = 0
         malformed_ips = Counter()
         
@@ -187,8 +219,16 @@ class AnomalyDetector:
         return anomalies
     
     def _detect_ml_anomalies(self, packets: List[PacketInfo]) -> List[AnomalyDetection]:
+        """Обучить IsolationForest на признаках по 1-секундным окнам и найти выбросы.
+
+        Пропускается, если пакетов меньше 100. Индексы аномальных строк из
+        predictions (одна строка на окно) используются напрямую как индексы в
+        packets (один элемент на пакет) — при >100 окнах это указывает на
+        несвязанные пакеты, так что anomaly_percentage и top_sources в
+        details можно доверять лишь приблизительно.
+        """
         anomalies = []
-        
+
         if len(packets) < 100:
             return anomalies
         
@@ -226,6 +266,12 @@ class AnomalyDetector:
         return anomalies
     
     def _extract_features(self, packets: List[PacketInfo]) -> np.ndarray:
+        """Bucket пакеты в 1-секундные окна и вернуть по одной строке признаков на окно.
+
+        Признаки на окно: [кол-во пакетов, суммарные байты, кол-во уникальных
+        src IP, средний размер пакета]. Не бывает признаков "на IP" — вся
+        группировка идёт по времени, а не по источнику.
+        """
         time_windows = defaultdict(lambda: {"count": 0, "bytes": 0, "ips": set()})
         
         if not packets:

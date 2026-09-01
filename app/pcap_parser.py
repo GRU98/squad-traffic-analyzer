@@ -1,3 +1,5 @@
+"""Разбор PCAP-файлов через Scapy в список пакетов и агрегированную статистику."""
+
 from scapy.all import rdpcap, IP, UDP, TCP, ICMP, Raw
 from typing import List, Dict, Tuple
 from collections import defaultdict, Counter
@@ -10,12 +12,26 @@ logger = logging.getLogger(__name__)
 
 
 class PcapParser:
+    """Читает PCAP-файл целиком в память и превращает его в TrafficStats + список PacketInfo."""
+
     def __init__(self, server_ip: str = None, game_port: int = 7787, query_port: int = 27165):
         self.server_ip = server_ip
         self.game_port = game_port
         self.query_port = query_port
-        
+
     def parse_pcap(self, pcap_path: str) -> Tuple[List[PacketInfo], TrafficStats]:
+        """Распарсить PCAP-файл.
+
+        Args:
+            pcap_path: путь к .pcap/.pcapng файлу.
+
+        Returns:
+            Кортеж (список пакетов с IP-слоем, агрегированная статистика).
+            Пакеты без IP-слоя пропускаются.
+
+        Raises:
+            Exception: если Scapy не смог прочитать файл (см. rdpcap).
+        """
         logger.info(f"Parsing PCAP file: {pcap_path}")
         
         try:
@@ -126,8 +142,9 @@ class PcapParser:
     
     def _initialize_stats(self) -> TrafficStats:
         return TrafficStats()
-    
+
     def _get_size_bucket(self, size: int) -> str:
+        """Отнести размер пакета (в байтах) к одному из фиксированных диапазонов."""
         if size < 64:
             return "0-64"
         elif size < 128:

@@ -1,3 +1,5 @@
+"""APScheduler-планировщик для автоматического захвата и анализа трафика (continuous/scheduled режимы)."""
+
 import asyncio
 import subprocess
 import logging
@@ -67,11 +69,13 @@ class AnalysisScheduler:
             logger.error(f"Capture and analyze failed: {e}")
     
     async def send_alert(self, result):
-        """Отправить уведомление об атаке"""
+        """Залогировать предупреждение об атаке.
+
+        Не реализовано: не отправляет Telegram/Email/Webhook — эти каналы
+        уже задействованы отдельно, через notifications.notifier внутри
+        TrafficAnalyzer.analyze_pcap, которую вызывает capture_and_analyze.
+        """
         logger.warning(f"⚠️ ALERT: Server under attack! Risk: {result.risk_score:.2f}")
-        
-        # TODO: Реализовать отправку в Telegram/Email/Webhook
-        pass
     
     def start_continuous_mode(self):
         """Запустить непрерывный мониторинг"""

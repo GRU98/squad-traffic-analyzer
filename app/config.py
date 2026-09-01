@@ -1,8 +1,12 @@
+"""Конфигурация приложения. Значения читаются из переменных окружения и файла .env."""
+
 from pydantic_settings import BaseSettings
 from typing import Optional
 
 
 class Settings(BaseSettings):
+    """Настройки приложения, сгруппированные по назначению (см. .env.example)."""
+
     # Application
     APP_NAME: str = "Squad Traffic Analyzer"
     VERSION: str = "1.0.0"
