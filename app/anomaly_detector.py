@@ -1,8 +1,8 @@
 """Детекция аномалий в трафике: эвристические правила + Isolation Forest (ML)."""
 
-from typing import List, Dict, Tuple
+from typing import List
 from collections import defaultdict, Counter
-from datetime import datetime, timedelta
+from datetime import datetime
 import numpy as np
 from sklearn.ensemble import IsolationForest
 import logging

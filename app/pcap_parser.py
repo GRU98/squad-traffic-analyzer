@@ -1,9 +1,8 @@
 """Разбор PCAP-файлов через Scapy в список пакетов и агрегированную статистику."""
 
-from scapy.all import rdpcap, IP, UDP, TCP, ICMP, Raw
-from typing import List, Dict, Tuple
+from scapy.all import rdpcap, IP, UDP, TCP, ICMP
+from typing import List, Tuple
 from collections import defaultdict, Counter
-from datetime import datetime
 import logging
 
 from models import PacketInfo, TrafficStats

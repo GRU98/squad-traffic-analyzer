@@ -1,7 +1,6 @@
 """FastAPI-приложение: HTTP-эндпоинты для анализа трафика Squad-сервера, история и статистика."""
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Depends
-from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from typing import List, Optional
@@ -12,7 +11,7 @@ import tempfile
 import logging
 
 from analyzer import TrafficAnalyzer
-from models import AnalysisResult, AnomalyDetection
+from models import AnalysisResult
 from database import init_db, get_db, AnalysisRecord
 from redis_client import RedisClient
 from config import settings
@@ -276,7 +275,6 @@ async def start_manual_capture(
 ):
     """Запустить ручной захват трафика"""
     import subprocess
-    import asyncio
     
     iface = interface or settings.CAPTURE_INTERFACE
     pcap_file = f"/app/pcap_captures/manual_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pcap"

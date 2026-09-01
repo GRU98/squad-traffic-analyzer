@@ -1,6 +1,5 @@
 """APScheduler-планировщик для автоматического захвата и анализа трафика (continuous/scheduled режимы)."""
 
-import asyncio
 import subprocess
 import logging
 from datetime import datetime

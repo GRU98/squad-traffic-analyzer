@@ -2,7 +2,7 @@
 
 import redis
 import json
-from typing import Optional, Dict
+from typing import Dict
 from datetime import datetime, timedelta
 import logging
 
