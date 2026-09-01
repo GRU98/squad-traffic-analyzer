@@ -9,6 +9,7 @@ RUN apt-get update && apt-get install -y \
     libpcap-dev \
     libpcap0.8 \
     gcc \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
@@ -23,12 +24,11 @@ RUN pip install --no-cache-dir --upgrade pip && \
 
 # Copy application code
 COPY app/ ./
-COPY .env.example .env.example
 
 # Create necessary directories
 RUN mkdir -p /app/data /app/pcap_captures /app/logs
 
-# Set permissions for tcpdump
+# Set permissions for tcpdump (run as root before switching user)
 RUN setcap cap_net_raw,cap_net_admin=eip /usr/bin/tcpdump || true
 
 # Create non-root user
@@ -41,8 +41,8 @@ USER analyzer
 EXPOSE 8000
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD python -c "import requests; requests.get('http://localhost:8000/health')" || exit 1
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
 
 # Run application
 CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

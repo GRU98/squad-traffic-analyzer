@@ -1,7 +1,48 @@
-version: '3.8'
-
 services:
-  # Main application
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: squad-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: traffic_analyzer
+      POSTGRES_USER: squad_analyzer
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - analyzer-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U squad_analyzer -d traffic_analyzer"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  redis:
+    image: redis:7-alpine
+    container_name: squad-redis
+    restart: unless-stopped
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:-changeme}", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    volumes:
+      - redis-data:/data
+    networks:
+      - analyzer-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-changeme}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+
   app:
     build:
       context: ..
@@ -11,16 +52,31 @@ services:
     ports:
       - "8000:8000"
     environment:
+      - ENVIRONMENT=production
       - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-changeme}
       - DATABASE_URL=postgresql://squad_analyzer:${DB_PASSWORD:-changeme}@postgres:5432/traffic_analyzer
+      - SQUAD_SERVER_IP=${SQUAD_SERVER_IP:-}
+      - SQUAD_GAME_PORT=${SQUAD_GAME_PORT:-7787}
+      - SQUAD_QUERY_PORT=${SQUAD_QUERY_PORT:-27165}
+      - ANALYSIS_MODE=${ANALYSIS_MODE:-manual}
+      - AUTO_CAPTURE_ENABLED=${AUTO_CAPTURE_ENABLED:-false}
+      - CAPTURE_INTERFACE=${CAPTURE_INTERFACE:-eth0}
+      - API_KEY_ENABLED=${API_KEY_ENABLED:-false}
+      - API_KEY=${API_KEY:-}
+      - TELEGRAM_ENABLED=${TELEGRAM_ENABLED:-false}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
     volumes:
       - ../data:/app/data
       - ../pcap_captures:/app/pcap_captures
       - ../logs:/app/logs
-      - ../.env:/app/.env
     depends_on:
-      - redis
-      - postgres
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     networks:
       - analyzer-network
     cap_add:
@@ -32,53 +88,12 @@ services:
         max-size: "10m"
         max-file: "3"
 
-  # Redis for caching
-  redis:
-    image: redis:7-alpine
-    container_name: squad-redis
-    restart: unless-stopped
-    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:-changeme}", "--maxmemory", "512mb", "--maxmemory-policy", "allkeys-lru"]
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis-data:/data
-    networks:
-      - analyzer-network
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "5m"
-        max-file: "2"
-
-  # PostgreSQL database
-  postgres:
-    image: postgres:15-alpine
-    container_name: squad-postgres
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: traffic_analyzer
-      POSTGRES_USER: squad_analyzer
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme}
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-    networks:
-      - analyzer-network
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-
-  # Nginx reverse proxy
   nginx:
     image: nginx:alpine
     container_name: squad-nginx
     restart: unless-stopped
     ports:
       - "80:80"
-      - "443:443"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ../logs/nginx:/var/log/nginx
@@ -91,17 +106,6 @@ services:
       options:
         max-size: "5m"
         max-file: "2"
-
-  # Prometheus metrics (optional)
-  # prometheus:
-  #   image: prom/prometheus:latest
-  #   container_name: squad-prometheus
-  #   volumes:
-  #     - ./prometheus.yml:/etc/prometheus/prometheus.yml
-  #   ports:
-  #     - "9090:9090"
-  #   networks:
-  #     - analyzer-network
 
 volumes:
   redis-data:
