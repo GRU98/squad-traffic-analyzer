@@ -986,7 +986,7 @@ Swagger UI: `http://твой-сервер:8000/docs` (отключён в produc
 | `GET` | `/stats/realtime` | ✓ | Real-time данные из Redis |
 | `DELETE` | `/cleanup` | ✓ | Удалить старые данные и PCAP файлы |
 
-> ✓ = требует заголовок `X-API-Key` если `API_KEY_ENABLED=true`
+> ✓ = требует заголовок `X-API-Key` если `API_KEY_ENABLED=true`. Если флаг включён, а `API_KEY` пуст, все защищённые маршруты отвечают `503`, а не пропускают запросы.
 
 #### Примеры запросов
 
