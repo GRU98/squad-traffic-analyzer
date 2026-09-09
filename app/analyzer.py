@@ -6,6 +6,7 @@ import uuid
 from datetime import datetime
 
 from anomaly_detector import AnomalyDetector
+from config import settings
 from database import AnalysisRecord, SessionLocal
 from models import AnalysisResult, AnomalyDetection, TrafficStats
 from pcap_parser import PcapParser
@@ -128,6 +129,14 @@ class TrafficAnalyzer:
             elif anomaly.type.value == "high_pps":
                 recommendations.append("Проверить настройки DDoS защиты")
                 recommendations.append("Рассмотреть использование CloudFlare/Qrator")
+
+            elif anomaly.type.value == "query_flood":
+                recommendations.append(
+                    f"Ограничить rate A2S-запросов на UDP {settings.SQUAD_QUERY_PORT} (iptables hashlimit / провайдер)"
+                )
+                recommendations.append(
+                    "Проверить, не используется ли сервер для reflection-атаки (ответы на spoofed IP)"
+                )
 
             elif anomaly.type.value == "suspicious_pattern":
                 if "SYN flood" in anomaly.description:

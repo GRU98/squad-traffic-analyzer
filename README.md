@@ -98,7 +98,7 @@ Squad Server (UDP 7787 / 27165)
 |---------|-------------|
 | 🔍 **PCAP Parsing** | Full packet parsing via Scapy — IP, UDP, TCP, ICMP, Raw payload |
 | 📊 **Traffic Stats** | PPS, BPS, unique IPs, protocol distribution, top talkers |
-| 🚨 **Heuristic Detection** | 5 checks, 6 anomaly types: High PPS, High BPS, Port Scan, Suspicious Pattern (SYN flood / tiny packets), DDoS, Malformed |
+| 🚨 **Heuristic Detection** | 6 checks, 7 anomaly types: High PPS, High BPS, Port Scan, Suspicious Pattern (SYN flood / tiny packets), DDoS, Malformed, A2S Query Flood |
 | 🤖 **ML Detection** | Isolation Forest — unsupervised, no labeled data required |
 | 🎯 **Risk Scoring** | Composite 0.0–1.0 score with attack flag |
 | ⚡ **3 Analysis Modes** | `manual`, `continuous` (interval), `scheduled` (cron) |
@@ -418,6 +418,7 @@ order is not guaranteed to match the order anomalies were processed in.
 | `suspicious_pattern` | SYN flood (>100 SYN packets with no ACK from one IP) or a flood of >500 packets under 64 bytes from one IP | up to 1.0 |
 | `ddos_attack` | One of the top-10 IPs by packet count sends >30% of traffic (and >1000 packets), or unique IP count exceeds `ANOMALY_THRESHOLD_CONNECTIONS` while PPS > 1000 | up to 1.0 |
 | `malformed_packet` | >50 UDP packets on the game/query port with length <20 or >1500 bytes | up to 1.0 |
+| `query_flood` | Inbound A2S requests to the query port exceed `ANOMALY_THRESHOLD_QUERY_PPS` per second (default: 100). Reports unique sources and the bytes-out / bytes-in amplification ratio. Requires `server_ip` | up to 1.0 |
 | `ml_detected` | Isolation Forest flags a 1-second window as an outlier (see below) | up to 1.0 |
 
 There is no dedicated `syn_flood` or `ddos_single_source` type — both cases above are
@@ -525,6 +526,7 @@ ANOMALY_THRESHOLD_PPS=10000         # packets/sec
 ANOMALY_THRESHOLD_BPS=100000000     # bytes/sec (100 MB)
 ANOMALY_THRESHOLD_CONNECTIONS=100   # concurrent connections
 ANOMALY_THRESHOLD_PORT_SCAN=20      # unique ports from one IP
+ANOMALY_THRESHOLD_QUERY_PPS=100     # inbound A2S requests/sec on the query port
 ML_MODEL_CONTAMINATION=0.1          # 0.0–0.5
 ML_ENABLED=true
 ```
@@ -782,7 +784,7 @@ Squad Server (UDP 7787 / 27165)
 |-------------|----------|
 | 🔍 **Парсинг PCAP** | Полный парсинг через Scapy — IP, UDP, TCP, ICMP, Raw payload |
 | 📊 **Статистика трафика** | PPS, BPS, уникальные IP, распределение протоколов, топ источников |
-| 🚨 **Эвристики** | 5 проверок, 6 типов аномалий: High PPS, High BPS, Port Scan, Suspicious Pattern (SYN flood / мелкие пакеты), DDoS, Malformed |
+| 🚨 **Эвристики** | 6 проверок, 7 типов аномалий: High PPS, High BPS, Port Scan, Suspicious Pattern (SYN flood / мелкие пакеты), DDoS, Malformed, A2S Query Flood |
 | 🤖 **ML детекция** | Isolation Forest — без обучающей разметки |
 | 🎯 **Risk Score** | Комплексная оценка 0.0–1.0 + флаг атаки |
 | ⚡ **3 режима** | `manual`, `continuous` (интервал), `scheduled` (cron) |
@@ -1068,6 +1070,7 @@ DATABASE_URL=postgresql://squad_analyzer:password@localhost:5432/traffic_analyze
 ANOMALY_THRESHOLD_PPS=10000         # пакетов/сек
 ANOMALY_THRESHOLD_BPS=100000000     # байт/сек (100 МБ)
 ANOMALY_THRESHOLD_PORT_SCAN=20      # уникальных портов с одного IP
+ANOMALY_THRESHOLD_QUERY_PPS=100     # входящих A2S-запросов/сек на query-порт
 ML_MODEL_CONTAMINATION=0.1          # ожидаемая доля аномалий 0–0.5
 ML_ENABLED=true
 ```
@@ -1123,6 +1126,7 @@ WEBHOOK_URL=https://your-service.com/hooks/squad-alerts
 | `suspicious_pattern` | SYN flood (>100 SYN-пакетов без ACK с одного IP) либо поток из >500 пакетов короче 64 байт с одного IP | до 1.0 |
 | `ddos_attack` | Один из топ-10 IP по числу пакетов даёт >30% трафика (и >1000 пакетов), либо число уникальных IP превышает `ANOMALY_THRESHOLD_CONNECTIONS` при PPS > 1000 | до 1.0 |
 | `malformed_packet` | >50 UDP-пакетов на игровом/query-порту с длиной <20 или >1500 байт | до 1.0 |
+| `query_flood` | Входящих A2S-запросов на query-порт больше `ANOMALY_THRESHOLD_QUERY_PPS` в секунду (default: 100). В деталях — число уникальных источников и коэффициент усиления bytes-out / bytes-in. Требует `server_ip` | до 1.0 |
 | `ml_detected` | Isolation Forest помечает 1-секундное окно как выброс (см. ниже) | до 1.0 |
 
 Отдельных типов `syn_flood` или `ddos_single_source` не существует — оба случая

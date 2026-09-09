@@ -39,6 +39,8 @@ class Settings(BaseSettings):
     ANOMALY_THRESHOLD_BPS: int = 100_000_000
     ANOMALY_THRESHOLD_CONNECTIONS: int = 100
     ANOMALY_THRESHOLD_PORT_SCAN: int = 20
+    # Входящих A2S-запросов в секунду на query-порт, выше которых считаем query flood.
+    ANOMALY_THRESHOLD_QUERY_PPS: int = 100
 
     # ML Model
     ML_MODEL_CONTAMINATION: float = 0.1

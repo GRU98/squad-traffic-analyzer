@@ -167,3 +167,50 @@ def test_anomalies_carry_timestamps():
     stats = TrafficStats(packets_per_second=settings.ANOMALY_THRESHOLD_PPS + 1)
     anomaly = AnomalyDetector().detect_anomalies([], stats)[0]
     assert isinstance(anomaly.timestamp, datetime)
+
+
+def query_stats(requests, seconds, sources, request_bytes=None, response_bytes=None):
+    return TrafficStats(
+        total_packets=requests,
+        packets_per_second=requests / seconds if seconds else 0,
+        query_requests=requests,
+        query_request_sources=sources,
+        query_request_bytes=request_bytes if request_bytes is not None else requests * 67,
+        query_responses=requests,
+        query_response_bytes=response_bytes if response_bytes is not None else requests * 350,
+    )
+
+
+def test_query_flood_detected_from_request_rate(monkeypatch):
+    monkeypatch.setattr(settings, "ANOMALY_THRESHOLD_QUERY_PPS", 100)
+    stats = query_stats(requests=30000, seconds=60, sources=25000)
+
+    anomalies = AnomalyDetector().detect_anomalies([], stats, server_ip="10.0.0.1")
+
+    flood = [a for a in anomalies if a.type == AnomalyType.QUERY_FLOOD]
+    assert len(flood) == 1
+    assert flood[0].severity == 1.0
+    assert flood[0].details["requests_per_second"] == pytest.approx(500)
+    assert flood[0].details["unique_sources"] == 25000
+    assert flood[0].details["amplification_ratio"] == pytest.approx(350 / 67, rel=1e-3)
+
+
+def test_query_flood_severity_scales_with_rate(monkeypatch):
+    monkeypatch.setattr(settings, "ANOMALY_THRESHOLD_QUERY_PPS", 100)
+    stats = query_stats(requests=12000, seconds=60, sources=10)  # 200 req/s = 2x threshold
+
+    flood = [a for a in AnomalyDetector().detect_anomalies([], stats) if a.type == AnomalyType.QUERY_FLOOD]
+
+    assert len(flood) == 1 and flood[0].severity == pytest.approx(0.4)
+
+
+def test_normal_query_rate_is_not_a_flood(monkeypatch):
+    monkeypatch.setattr(settings, "ANOMALY_THRESHOLD_QUERY_PPS", 100)
+    stats = query_stats(requests=300, seconds=60, sources=40)  # 5 req/s: браузер серверов + Steam master
+
+    assert AnomalyType.QUERY_FLOOD not in types(AnomalyDetector().detect_anomalies([], stats))
+
+
+def test_query_flood_needs_a_measurable_rate():
+    stats = query_stats(requests=5000, seconds=0, sources=5000)  # один timestamp → PPS = 0
+    assert AnomalyType.QUERY_FLOOD not in types(AnomalyDetector().detect_anomalies([], stats))

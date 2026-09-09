@@ -4,6 +4,7 @@ import pytest
 from packets import SERVER_IP, game_session, udp
 
 from analyzer import TrafficAnalyzer
+from config import settings
 from database import AnalysisRecord, SessionLocal
 from models import AnomalyDetection, AnomalyType, TrafficStats
 
@@ -119,3 +120,25 @@ async def test_unreadable_pcap_raises(tmp_path):
     bad.write_bytes(b"not a pcap")
     with pytest.raises((OSError, ValueError, Exception)):  # noqa: B017 — Scapy бросает Scapy_Exception/FileNotFoundError
         await TrafficAnalyzer().analyze_pcap(str(bad))
+
+
+async def test_analyze_query_flood_pcap_end_to_end(pcap_builder, monkeypatch):
+    from packets import A2S_INFO_REQUEST, QUERY_PORT
+
+    monkeypatch.setattr(settings, "ANOMALY_THRESHOLD_QUERY_PPS", 100)
+    # 6000 spoofed A2S_INFO requests in 10s (600 req/s) from 6000 sources, each answered with ~350 bytes
+    packets = []
+    for i in range(6000):
+        src = f"{(i >> 16) % 256 or 1}.{(i >> 8) % 256}.{i % 256}.7"
+        t = i / 600
+        packets.append(udp(src, dport=QUERY_PORT, payload=A2S_INFO_REQUEST, t=t))
+        packets.append(udp(SERVER_IP, dst=src, sport=QUERY_PORT, dport=50000, size=350, t=t + 0.0005))
+    packets.extend(game_session(clients=3, seconds=10, pps_per_client=5))
+    packets.sort(key=lambda p: p.time)
+
+    result = await TrafficAnalyzer().analyze_pcap(pcap_builder(packets), server_ip=SERVER_IP)
+
+    flood = [a for a in result.anomalies if a.type == AnomalyType.QUERY_FLOOD]
+    assert len(flood) == 1 and flood[0].severity == 1.0
+    assert result.stats.query_requests == 6000 and result.stats.query_request_sources == 6000
+    assert any("A2S" in r for r in result.recommendations)

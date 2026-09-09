@@ -52,6 +52,7 @@ class AnomalyDetector:
         anomalies.extend(self._detect_suspicious_patterns(inbound))
         anomalies.extend(self._detect_ddos_patterns(inbound, stats))
         anomalies.extend(self._detect_malformed_packets(inbound))
+        anomalies.extend(self._detect_query_flood(stats))
 
         ml_anomalies = self._detect_ml_anomalies(packets)
         anomalies.extend(ml_anomalies)
@@ -233,6 +234,50 @@ class AnomalyDetector:
                     timestamp=datetime.now(),
                     source_ip=top_offender[0],
                     details={"malformed_count": malformed_count, "top_sources": dict(malformed_ips.most_common(5))},
+                )
+            )
+
+        return anomalies
+
+    def _detect_query_flood(self, stats: TrafficStats) -> list[AnomalyDetection]:
+        """Обнаружить A2S query flood / amplification на query-порту.
+
+        Steam-запрос A2S_INFO — это ~25 байт payload, ответ сервера — сотни байт,
+        поэтому query-порт используют и для отражённых (spoofed) атак, и для
+        прямого флуда. Правило: входящих запросов в секунду больше
+        ANOMALY_THRESHOLD_QUERY_PPS. Работает только если парсер знал server_ip
+        (иначе счётчики запросов нулевые). Ставка PPS считается по длительности
+        захвата (total_packets / packets_per_second).
+        """
+        anomalies: list[AnomalyDetection] = []
+
+        if stats.query_requests == 0 or stats.packets_per_second <= 0 or stats.total_packets == 0:
+            return anomalies
+
+        duration = stats.total_packets / stats.packets_per_second
+        requests_per_second = stats.query_requests / duration
+        threshold = settings.ANOMALY_THRESHOLD_QUERY_PPS
+
+        if requests_per_second > threshold:
+            severity = min(1.0, requests_per_second / (threshold * 5))
+            amplification = stats.query_response_bytes / stats.query_request_bytes if stats.query_request_bytes else 0.0
+            anomalies.append(
+                AnomalyDetection(
+                    type=AnomalyType.QUERY_FLOOD,
+                    severity=severity,
+                    description=(
+                        f"Query flood на порту {settings.SQUAD_QUERY_PORT}: {requests_per_second:.0f} запросов/сек "
+                        f"с {stats.query_request_sources} IP (amplification x{amplification:.1f})"
+                    ),
+                    timestamp=datetime.now(),
+                    details={
+                        "requests_per_second": requests_per_second,
+                        "threshold": threshold,
+                        "unique_sources": stats.query_request_sources,
+                        "requests": stats.query_requests,
+                        "responses": stats.query_responses,
+                        "amplification_ratio": amplification,
+                    },
                 )
             )
 

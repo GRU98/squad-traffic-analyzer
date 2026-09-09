@@ -17,6 +17,7 @@ class AnomalyType(str, Enum):
     MALFORMED_PACKET = "malformed_packet"
     UNUSUAL_PROTOCOL = "unusual_protocol"
     DDOS_ATTACK = "ddos_attack"
+    QUERY_FLOOD = "query_flood"
     ML_DETECTED = "ml_detected"
 
 
