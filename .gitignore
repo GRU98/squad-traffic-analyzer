@@ -90,3 +90,6 @@ docs/_build/
 # Secrets
 secrets/
 *.secret
+
+# Claude Code session state
+.claude/
