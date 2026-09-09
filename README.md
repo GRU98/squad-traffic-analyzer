@@ -427,7 +427,7 @@ order is not guaranteed to match the order anomalies were processed in.
 | `suspicious_pattern` | SYN flood (>100 SYN packets with no ACK from one IP) or a flood of >500 packets under 64 bytes from one IP | up to 1.0 |
 | `ddos_attack` | One of the top-10 IPs by packet count sends >30% of traffic (and >1000 packets), or unique IP count exceeds `ANOMALY_THRESHOLD_CONNECTIONS` while PPS > 1000 | up to 1.0 |
 | `malformed_packet` | >50 UDP packets on the game/query port with length <20 or >1500 bytes | up to 1.0 |
-| `query_flood` | Inbound A2S requests to the query port exceed `ANOMALY_THRESHOLD_QUERY_PPS` per second (default: 100). Reports unique sources and the bytes-out / bytes-in amplification ratio. Requires `server_ip` | up to 1.0 |
+| `query_flood` | Inbound datagrams to the query port (valid A2S or not — attackers also flood it with garbage) exceed `ANOMALY_THRESHOLD_QUERY_PPS` per second (default: 100). Reports unique sources and the bytes-out / bytes-in amplification ratio. Requires `server_ip` | up to 1.0 |
 | `ml_detected` | Isolation Forest flags a 1-second window as an outlier (see below) | up to 1.0 |
 
 There is no dedicated `syn_flood` or `ddos_single_source` type — both cases above are
@@ -435,7 +435,7 @@ reported under `suspicious_pattern` / `ddos_attack`, distinguishable only by `de
 
 When `server_ip` is known (query parameter, or `SQUAD_SERVER_IP` for captures), packets
 **sent by the server** are excluded from the per-source rules (`port_scan`, `suspicious_pattern`,
-`ddos_attack`, `malformed_packet`). A busy server answers dozens of client ports and produces
+`ddos_attack`, `malformed_packet`, `ml_detected`). A busy server answers dozens of client ports and produces
 most of the bytes on the wire, which would otherwise look like a port scan or a DDoS source.
 Always pass `server_ip` for accurate results.
 
@@ -1152,7 +1152,7 @@ WEBHOOK_URL=https://your-service.com/hooks/squad-alerts
 | `suspicious_pattern` | SYN flood (>100 SYN-пакетов без ACK с одного IP) либо поток из >500 пакетов короче 64 байт с одного IP | до 1.0 |
 | `ddos_attack` | Один из топ-10 IP по числу пакетов даёт >30% трафика (и >1000 пакетов), либо число уникальных IP превышает `ANOMALY_THRESHOLD_CONNECTIONS` при PPS > 1000 | до 1.0 |
 | `malformed_packet` | >50 UDP-пакетов на игровом/query-порту с длиной <20 или >1500 байт | до 1.0 |
-| `query_flood` | Входящих A2S-запросов на query-порт больше `ANOMALY_THRESHOLD_QUERY_PPS` в секунду (default: 100). В деталях — число уникальных источников и коэффициент усиления bytes-out / bytes-in. Требует `server_ip` | до 1.0 |
+| `query_flood` | Входящих датаграмм на query-порт (валидных A2S или нет — атакующие флудят его и мусором) больше `ANOMALY_THRESHOLD_QUERY_PPS` в секунду (default: 100). В деталях — число уникальных источников и коэффициент усиления bytes-out / bytes-in. Требует `server_ip` | до 1.0 |
 | `ml_detected` | Isolation Forest помечает 1-секундное окно как выброс (см. ниже) | до 1.0 |
 
 Отдельных типов `syn_flood` или `ddos_single_source` не существует — оба случая
@@ -1160,7 +1160,7 @@ WEBHOOK_URL=https://your-service.com/hooks/squad-alerts
 
 Если известен `server_ip` (query-параметр или `SQUAD_SERVER_IP` для захватов), пакеты,
 **отправленные сервером**, исключаются из правил «по источнику» (`port_scan`, `suspicious_pattern`,
-`ddos_attack`, `malformed_packet`). Нагруженный сервер отвечает десяткам клиентских портов и
+`ddos_attack`, `malformed_packet`, `ml_detected`). Нагруженный сервер отвечает десяткам клиентских портов и
 генерирует большую часть байтов — без фильтра это выглядит как сканирование портов или DDoS.
 Для точного результата всегда передавайте `server_ip`.
 

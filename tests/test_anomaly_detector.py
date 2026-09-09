@@ -229,3 +229,42 @@ async def test_concurrent_ml_detection_is_safe():
     results = await asyncio.gather(*(asyncio.to_thread(detector._detect_ml_anomalies, packets) for _ in range(8)))
 
     assert all(len(r) == 1 and r[0].source_ip == "66.66.66.66" for r in results)
+
+
+def test_malformed_detection_honours_custom_ports():
+    packets = [pkt("5.5.5.5", length=10, dport=9787) for _ in range(60)]
+
+    default_ports = AnomalyDetector().detect_anomalies(packets, TrafficStats())
+    custom_ports = AnomalyDetector().detect_anomalies(packets, TrafficStats(), game_port=9787, query_port=29165)
+
+    assert AnomalyType.MALFORMED_PACKET not in types(default_ports)
+    assert AnomalyType.MALFORMED_PACKET in types(custom_ports)
+
+
+def test_query_flood_description_uses_analysis_port(monkeypatch):
+    monkeypatch.setattr(settings, "ANOMALY_THRESHOLD_QUERY_PPS", 100)
+    stats = query_stats(requests=30000, seconds=60, sources=25000)
+
+    flood = [
+        a for a in AnomalyDetector().detect_anomalies([], stats, query_port=29165) if a.type == AnomalyType.QUERY_FLOOD
+    ]
+
+    assert "29165" in flood[0].description
+
+
+def test_ml_ignores_server_reply_burst_when_server_ip_known():
+    """Всплеск исходящих ответов сервера не должен становиться ML-аномалией с source_ip сервера."""
+    packets = normal_traffic(clients=5, seconds=30, pps=10)
+    packets += [
+        pkt("10.0.0.1", dst=f"192.168.9.{i % 200}", sport=7787, dport=40000 + i, length=1400, t=20 + i * 0.0005)
+        for i in range(1500)
+    ]
+    packets.sort(key=lambda p: p.timestamp)
+    stats = TrafficStats(total_packets=len(packets), unique_ips=206, packets_per_second=len(packets) / 30)
+
+    with_server = AnomalyDetector().detect_anomalies(packets, stats, server_ip="10.0.0.1")
+    without_server = AnomalyDetector().detect_anomalies(packets, stats)
+
+    assert AnomalyType.ML_DETECTED not in types(with_server)
+    ml = [a for a in without_server if a.type == AnomalyType.ML_DETECTED]
+    assert ml and ml[0].source_ip == "10.0.0.1"

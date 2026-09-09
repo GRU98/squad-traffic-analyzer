@@ -57,7 +57,9 @@ class TrafficAnalyzer:
 
         packets, stats = await asyncio.to_thread(self.parser.parse_pcap, pcap_path)
 
-        anomalies = await asyncio.to_thread(self.detector.detect_anomalies, packets, stats, server_ip)
+        anomalies = await asyncio.to_thread(
+            self.detector.detect_anomalies, packets, stats, server_ip, game_port, query_port
+        )
 
         risk_score = self._calculate_risk_score(anomalies, stats)
         is_under_attack = risk_score > 0.7

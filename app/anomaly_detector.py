@@ -34,6 +34,8 @@ class AnomalyDetector:
         packets: list[PacketInfo],
         stats: TrafficStats,
         server_ip: str | None = None,
+        game_port: int | None = None,
+        query_port: int | None = None,
     ) -> list[AnomalyDetection]:
         """Запустить все детекторы и вернуть найденные аномалии по убыванию severity.
 
@@ -45,22 +47,27 @@ class AnomalyDetector:
                 портов, мелкие пакеты): сервер сам отвечает десяткам клиентских
                 портов и генерирует большую долю трафика, что без фильтра
                 выглядит как атака. Без server_ip анализируются все пакеты.
+            game_port: игровой порт этого анализа (по умолчанию SQUAD_GAME_PORT).
+            query_port: query-порт этого анализа (по умолчанию SQUAD_QUERY_PORT).
 
         Returns:
             Список AnomalyDetection, отсортированный по severity (убывание).
         """
         anomalies = []
         inbound = [pkt for pkt in packets if pkt.src_ip != server_ip] if server_ip else packets
+        game_port = game_port if game_port is not None else settings.SQUAD_GAME_PORT
+        query_port = query_port if query_port is not None else settings.SQUAD_QUERY_PORT
 
         anomalies.extend(self._detect_high_traffic(stats))
         anomalies.extend(self._detect_port_scan(inbound))
         anomalies.extend(self._detect_suspicious_patterns(inbound))
         anomalies.extend(self._detect_ddos_patterns(inbound, stats))
-        anomalies.extend(self._detect_malformed_packets(inbound))
-        anomalies.extend(self._detect_query_flood(stats))
+        anomalies.extend(self._detect_malformed_packets(inbound, game_port, query_port))
+        anomalies.extend(self._detect_query_flood(stats, query_port))
 
-        ml_anomalies = self._detect_ml_anomalies(packets)
-        anomalies.extend(ml_anomalies)
+        # ML тоже смотрит только на входящий трафик: иначе всплеск ответов сервера
+        # (или его restart-handshake на spoofed-флуд) атрибутировался бы самому серверу.
+        anomalies.extend(self._detect_ml_anomalies(inbound))
 
         anomalies.sort(key=lambda x: x.severity, reverse=True)
 
@@ -212,7 +219,9 @@ class AnomalyDetector:
 
         return anomalies
 
-    def _detect_malformed_packets(self, packets: list[PacketInfo]) -> list[AnomalyDetection]:
+    def _detect_malformed_packets(
+        self, packets: list[PacketInfo], game_port: int, query_port: int
+    ) -> list[AnomalyDetection]:
         """Посчитать UDP-пакеты на игровом/query-порту с длиной вне диапазона 20–1500 байт."""
         anomalies = []
 
@@ -220,10 +229,7 @@ class AnomalyDetector:
         malformed_ips = Counter()
 
         for pkt in packets:
-            on_squad_port = pkt.protocol == "UDP" and pkt.dst_port in (
-                settings.SQUAD_GAME_PORT,
-                settings.SQUAD_QUERY_PORT,
-            )
+            on_squad_port = pkt.protocol == "UDP" and pkt.dst_port in (game_port, query_port)
             if on_squad_port and (pkt.length < 20 or pkt.length > 1500):
                 malformed_count += 1
                 malformed_ips[pkt.src_ip] += 1
@@ -244,15 +250,17 @@ class AnomalyDetector:
 
         return anomalies
 
-    def _detect_query_flood(self, stats: TrafficStats) -> list[AnomalyDetection]:
-        """Обнаружить A2S query flood / amplification на query-порту.
+    def _detect_query_flood(self, stats: TrafficStats, query_port: int) -> list[AnomalyDetection]:
+        """Обнаружить query flood / amplification на query-порту.
 
         Steam-запрос A2S_INFO — это ~25 байт payload, ответ сервера — сотни байт,
         поэтому query-порт используют и для отражённых (spoofed) атак, и для
-        прямого флуда. Правило: входящих запросов в секунду больше
-        ANOMALY_THRESHOLD_QUERY_PPS. Работает только если парсер знал server_ip
-        (иначе счётчики запросов нулевые). Ставка PPS считается по длительности
-        захвата (total_packets / packets_per_second).
+        прямого флуда. Правило: входящих датаграмм на query-порт в секунду больше
+        ANOMALY_THRESHOLD_QUERY_PPS. Считаются все датаграммы, а не только валидные
+        A2S: атакующие давно шлют и невалидные A2S-пакеты, а легитимного трафика,
+        кроме Steam-запросов, на этом порту нет. Работает только если парсер знал
+        server_ip (иначе счётчики запросов нулевые). Ставка считается по
+        длительности захвата (total_packets / packets_per_second).
         """
         anomalies: list[AnomalyDetection] = []
 
@@ -271,7 +279,7 @@ class AnomalyDetector:
                     type=AnomalyType.QUERY_FLOOD,
                     severity=severity,
                     description=(
-                        f"Query flood на порту {settings.SQUAD_QUERY_PORT}: {requests_per_second:.0f} запросов/сек "
+                        f"Query flood на порту {query_port}: {requests_per_second:.0f} запросов/сек "
                         f"с {stats.query_request_sources} IP (amplification x{amplification:.1f})"
                     ),
                     timestamp=datetime.now(),

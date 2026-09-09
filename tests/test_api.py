@@ -198,3 +198,30 @@ class TestApiKey:
         assert client.get("/mode").status_code == 503
         monkeypatch.setattr(settings, "API_KEY", "")
         assert client.get("/mode", headers={"X-API-Key": ""}).status_code == 503
+
+
+def test_upload_with_custom_ports_drives_counters_and_malformed_detection(client, pcap_builder):
+    from packets import A2S_INFO_REQUEST
+
+    packets = []
+    for i in range(80):
+        packets.append(udp(f"7.7.7.{i % 50}", dport=9787, size=1500, t=i * 0.01))  # >1500 байт на кастомном game-порту
+    packets.append(udp("8.8.8.8", dport=29165, payload=A2S_INFO_REQUEST, t=0.5))
+    packets.append(udp("10.0.0.1", dst="8.8.8.8", sport=29165, dport=50000, size=300, t=0.6))
+    packets.extend(game_session(clients=2, seconds=1, pps_per_client=5))
+    packets.sort(key=lambda p: p.time)
+
+    with open(pcap_builder(packets), "rb") as fh:
+        resp = client.post(
+            "/analyze/upload",
+            params={"server_ip": "10.0.0.1", "game_port": 9787, "query_port": 29165},
+            files={"file": ("custom.pcap", fh)},
+        )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["stats"]["game_port_packets"] == 80
+    assert body["stats"]["query_port_packets"] == 2
+    assert body["stats"]["query_requests"] == 1 and body["stats"]["query_responses"] == 1
+    malformed = [a for a in body["anomalies"] if a["type"] == "malformed_packet"]
+    assert len(malformed) == 1 and malformed[0]["details"]["malformed_count"] == 80

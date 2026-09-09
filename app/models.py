@@ -49,8 +49,8 @@ class TrafficStats(BaseModel):
     game_port_packets: int = 0
     query_port_packets: int = 0
 
-    # Направление на query-порту (только при известном server_ip): запросы к серверу
-    # и его ответы. Используется детектором A2S query flood / amplification.
+    # Направление на query-порту (только при известном server_ip): любые входящие датаграммы
+    # к серверу (валидные A2S или нет) и его ответы. Используется детектором query flood.
     query_requests: int = 0
     query_responses: int = 0
     query_request_sources: int = 0

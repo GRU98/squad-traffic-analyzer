@@ -104,3 +104,14 @@ def test_query_counters_stay_zero_without_server_ip(pcap_builder):
     _, stats = PcapParser().parse_pcap(pcap_builder([udp("1.1.1.1", dport=QUERY_PORT, payload=A2S_INFO_REQUEST)]))
 
     assert stats.query_requests == 0 and stats.query_responses == 0 and stats.query_request_sources == 0
+
+
+def test_any_inbound_datagram_on_query_port_counts_as_query(pcap_builder):
+    """Невалидные A2S-пакеты тоже считаются: атакующие флудят query-порт и мусором."""
+    packets = [
+        udp("1.1.1.1", dport=QUERY_PORT, payload=b"\x00" * 25),
+        udp("2.2.2.2", dport=QUERY_PORT, payload=b"garbage"),
+    ]
+    _, stats = PcapParser(server_ip=SERVER_IP).parse_pcap(pcap_builder(packets))
+
+    assert stats.query_requests == 2 and stats.query_request_sources == 2
