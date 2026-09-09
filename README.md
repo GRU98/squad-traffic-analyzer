@@ -160,9 +160,18 @@ traffic_analyzer/
 | Docker | 20+ | Optional, for Docker mode |
 | PostgreSQL | 13+ | Optional, SQLite is default |
 
-**Squad Server Ports captured:**
-- `UDP 7787` — game traffic
-- `UDP 27165` — Steam query
+**Squad Server Ports:**
+
+| Port | Protocol | Purpose | Captured by default |
+|------|----------|---------|---------------------|
+| `7787` (+`7788`) | UDP | Game traffic (Unreal NetDriver) | `7787` only |
+| `27165` (+`27166`) | UDP | Steam A2S query | `27165` only |
+| `15000` | UDP | EOS beacon (since Squad v7.0) | no |
+| `21114` | TCP | Source RCON | no |
+
+The default tcpdump filter is `udp port <SQUAD_GAME_PORT> or udp port <SQUAD_QUERY_PORT>`.
+Set `CAPTURE_FILTER` to any BPF expression to widen it, e.g.
+`udp portrange 7787-7788 or udp portrange 27165-27166 or udp port 15000`.
 
 ---
 
@@ -430,6 +439,12 @@ When `server_ip` is known (query parameter, or `SQUAD_SERVER_IP` for captures), 
 most of the bytes on the wire, which would otherwise look like a port scan or a DDoS source.
 Always pass `server_ip` for accurate results.
 
+`query_flood` is calibrated against Valve's own guidance: the Steam game-server library drops
+connectionless A2S packets above `STEAM_GAMESERVER_RATE_LIMIT_200MS` per source (recommended
+25–75 per 200 ms), and a 25-byte `A2S_INFO` request draws a 200–1400-byte reply (Steam reflection
+amplification averages ~5.5×, up to ~14×). Legitimate query traffic on a busy server is a trickle
+from the Steam master and server browsers, so an aggregate rate above 100 requests/s is a flood.
+
 #### ML Detection (Isolation Forest)
 
 Skipped entirely if the capture has fewer than 100 packets. Features are extracted
@@ -554,6 +569,7 @@ CONTINUOUS_INTERVAL_SECONDS=300
 SCHEDULED_CRON=0 */6 * * *
 CAPTURE_INTERFACE=ens6
 CAPTURE_DURATION_SECONDS=60
+CAPTURE_FILTER=               # BPF filter for tcpdump; empty = "udp port <game> or udp port <query>"
 PCAP_DIR=/app/pcap_captures   # captures are written here; /analyze/path accepts only files inside it
 PCAP_RETENTION_DAYS=7
 ```
@@ -847,8 +863,17 @@ traffic_analyzer/
 | PostgreSQL | 13+ | Опционально, по умолчанию SQLite |
 
 **Порты Squad сервера:**
-- `UDP 7787` — игровой трафик
-- `UDP 27165` — Steam query
+
+| Порт | Протокол | Назначение | Захватывается по умолчанию |
+|------|----------|------------|----------------------------|
+| `7787` (+`7788`) | UDP | Игровой трафик (Unreal NetDriver) | только `7787` |
+| `27165` (+`27166`) | UDP | Steam A2S query | только `27165` |
+| `15000` | UDP | EOS beacon (с Squad v7.0) | нет |
+| `21114` | TCP | Source RCON | нет |
+
+Фильтр tcpdump по умолчанию — `udp port <SQUAD_GAME_PORT> or udp port <SQUAD_QUERY_PORT>`.
+Через `CAPTURE_FILTER` можно задать любое BPF-выражение, например
+`udp portrange 7787-7788 or udp portrange 27165-27166 or udp port 15000`.
 
 ---
 
@@ -953,6 +978,7 @@ AUTO_CAPTURE_ENABLED=true
 CONTINUOUS_INTERVAL_SECONDS=300    # каждые 5 минут
 CAPTURE_DURATION_SECONDS=60        # окно захвата
 CAPTURE_INTERFACE=ens6
+CAPTURE_FILTER=                    # BPF-фильтр tcpdump; пусто = "udp port <game> or udp port <query>"
 PCAP_DIR=/app/pcap_captures        # сюда пишутся захваты; /analyze/path принимает только файлы отсюда
 ```
 
@@ -1137,6 +1163,12 @@ WEBHOOK_URL=https://your-service.com/hooks/squad-alerts
 `ddos_attack`, `malformed_packet`). Нагруженный сервер отвечает десяткам клиентских портов и
 генерирует большую часть байтов — без фильтра это выглядит как сканирование портов или DDoS.
 Для точного результата всегда передавайте `server_ip`.
+
+`query_flood` откалиброван по рекомендациям Valve: библиотека Steam game-server отбрасывает
+connectionless A2S-пакеты выше `STEAM_GAMESERVER_RATE_LIMIT_200MS` на источник (рекомендуется
+25–75 за 200 мс), а 25-байтовый запрос `A2S_INFO` вызывает ответ 200–1400 байт (усиление Steam
+reflection в среднем ~5.5×, до ~14×). Легитимный query-трафик даже нагруженного сервера — это
+редкие запросы Steam master и браузеров серверов, поэтому суммарно >100 запросов/с — флуд.
 
 #### ML-детекция (Isolation Forest)
 

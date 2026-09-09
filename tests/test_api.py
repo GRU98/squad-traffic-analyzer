@@ -168,7 +168,12 @@ def test_capture_start_launches_tcpdump(client, tmp_path, monkeypatch):
     body = resp.json()
     assert body["pid"] == 4242 and body["pcap_file"].startswith(str(pcap_dir))
     assert launched["cmd"][0] == "tcpdump" and "en0" in launched["cmd"] and "5" in launched["cmd"]
+    assert launched["cmd"][-1] == f"udp port {settings.SQUAD_GAME_PORT} or udp port {settings.SQUAD_QUERY_PORT}"
     assert pcap_dir.is_dir()
+
+    monkeypatch.setattr(settings, "CAPTURE_FILTER", "udp portrange 7787-7788")
+    assert client.post("/capture/start", params={"duration": 5}).status_code == 200
+    assert launched["cmd"][-1] == "udp portrange 7787-7788"
 
 
 class TestApiKey:

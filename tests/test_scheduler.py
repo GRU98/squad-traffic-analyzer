@@ -53,8 +53,11 @@ async def test_capture_and_analyze_runs_tcpdump_then_analyzes(fresh_scheduler, m
         returncode = 0
         stderr = b""
 
+    monkeypatch.setattr(settings, "CAPTURE_FILTER", "udp port 15000")
+
     def fake_run(cmd, **kwargs):
         assert cmd[0] == "tcpdump" and cmd[cmd.index("-w") + 1].startswith(str(tmp_path / "captures"))
+        assert cmd[-1] == "udp port 15000"
         return Done()
 
     async def fake_analyze(path, **kwargs):

@@ -46,7 +46,7 @@ class AnalysisScheduler:
                 str(settings.CAPTURE_DURATION_SECONDS),
                 "-W",
                 "1",
-                f"udp port {settings.SQUAD_GAME_PORT} or udp port {settings.SQUAD_QUERY_PORT}",
+                settings.capture_filter(),
             ]
 
             process = await asyncio.to_thread(

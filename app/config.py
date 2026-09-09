@@ -76,6 +76,14 @@ class Settings(BaseSettings):
     AUTO_CAPTURE_ENABLED: bool = False
     CAPTURE_DURATION_SECONDS: int = 60
     CAPTURE_INTERFACE: str = "eth0"
+    # BPF-фильтр для tcpdump. Пусто — строится из SQUAD_GAME_PORT/SQUAD_QUERY_PORT.
+    # Squad также использует второй game-порт 7788, второй query-порт 27166 и EOS beacon 15000,
+    # например: "udp portrange 7787-7788 or udp portrange 27165-27166 or udp port 15000".
+    CAPTURE_FILTER: str = ""
+
+    def capture_filter(self) -> str:
+        """BPF-выражение для tcpdump: CAPTURE_FILTER, либо два порта сервера по умолчанию."""
+        return self.CAPTURE_FILTER.strip() or f"udp port {self.SQUAD_GAME_PORT} or udp port {self.SQUAD_QUERY_PORT}"
 
     # Notifications
     TELEGRAM_ENABLED: bool = False

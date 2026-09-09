@@ -314,7 +314,7 @@ async def start_manual_capture(
         str(duration),
         "-W",
         "1",
-        f"udp port {settings.SQUAD_GAME_PORT} or udp port {settings.SQUAD_QUERY_PORT}",
+        settings.capture_filter(),
     ]
     try:
         proc = await asyncio.create_subprocess_exec(*cmd)
