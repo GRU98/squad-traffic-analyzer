@@ -214,3 +214,18 @@ def test_normal_query_rate_is_not_a_flood(monkeypatch):
 def test_query_flood_needs_a_measurable_rate():
     stats = query_stats(requests=5000, seconds=0, sources=5000)  # один timestamp → PPS = 0
     assert AnomalyType.QUERY_FLOOD not in types(AnomalyDetector().detect_anomalies([], stats))
+
+
+async def test_concurrent_ml_detection_is_safe():
+    """Один AnomalyDetector, параллельные вызовы из потоков — как в TrafficAnalyzer под нагрузкой."""
+    import asyncio
+
+    detector = AnomalyDetector()
+    packets = normal_traffic(clients=5, seconds=30, pps=10) + [
+        pkt("66.66.66.66", length=1400, t=20 + i * 0.0005) for i in range(1500)
+    ]
+    packets.sort(key=lambda p: p.timestamp)
+
+    results = await asyncio.gather(*(asyncio.to_thread(detector._detect_ml_anomalies, packets) for _ in range(8)))
+
+    assert all(len(r) == 1 and r[0].source_ip == "66.66.66.66" for r in results)

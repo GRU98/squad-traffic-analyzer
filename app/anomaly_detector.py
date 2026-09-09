@@ -21,8 +21,13 @@ class AnomalyDetector:
     """
 
     def __init__(self):
-        self.ml_model = IsolationForest(contamination=settings.ML_MODEL_CONTAMINATION, random_state=42)
         self.baseline_trained = False
+
+    @staticmethod
+    def _new_ml_model() -> IsolationForest:
+        # Модель создаётся на каждый вызов: анализы выполняются в worker-потоках
+        # параллельно, а общий экземпляр IsolationForest не потокобезопасен при fit.
+        return IsolationForest(contamination=settings.ML_MODEL_CONTAMINATION, random_state=42)
 
     def detect_anomalies(
         self,
@@ -304,7 +309,7 @@ class AnomalyDetector:
             if len(features) < 2:
                 return anomalies
 
-            predictions = self.ml_model.fit_predict(features)
+            predictions = self._new_ml_model().fit_predict(features)
 
             median_count = float(np.median(features[:, 0]))
             median_bytes = float(np.median(features[:, 1]))
