@@ -45,6 +45,7 @@ class PcapParser:
         ip_counter = Counter()
         protocol_counter = Counter()
         size_buckets = defaultdict(int)
+        query_request_sources = set()
 
         first_timestamp = None
         last_timestamp = None
@@ -84,10 +85,15 @@ class PcapParser:
                         src_ip == self.server_ip and src_port == self.game_port
                     ):
                         stats.game_port_packets += 1
-                    elif (dst_ip == self.server_ip and dst_port == self.query_port) or (
-                        src_ip == self.server_ip and src_port == self.query_port
-                    ):
+                    elif dst_ip == self.server_ip and dst_port == self.query_port:
                         stats.query_port_packets += 1
+                        stats.query_requests += 1
+                        stats.query_request_bytes += length
+                        query_request_sources.add(src_ip)
+                    elif src_ip == self.server_ip and src_port == self.query_port:
+                        stats.query_port_packets += 1
+                        stats.query_responses += 1
+                        stats.query_response_bytes += length
 
             elif pkt.haslayer(TCP):
                 protocol = "TCP"
@@ -130,6 +136,7 @@ class PcapParser:
                 stats.bytes_per_second = stats.total_bytes / duration
 
         stats.unique_ips = len(ip_counter)
+        stats.query_request_sources = len(query_request_sources)
         stats.top_talkers = [{"ip": ip, "packets": count} for ip, count in ip_counter.most_common(10)]
         stats.protocol_distribution = dict(protocol_counter)
         stats.packet_size_distribution = dict(size_buckets)

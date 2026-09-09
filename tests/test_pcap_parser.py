@@ -76,3 +76,31 @@ def test_top_talkers_are_sorted_by_packet_count(pcap_builder):
     assert stats.top_talkers[0]["ip"] == SERVER_IP
     counts = [t["packets"] for t in stats.top_talkers]
     assert counts == sorted(counts, reverse=True)
+
+
+def test_query_port_requests_and_responses_are_counted(pcap_builder):
+    from packets import A2S_INFO_REQUEST
+
+    packets = [
+        udp("1.1.1.1", dport=QUERY_PORT, payload=A2S_INFO_REQUEST, t=0.0),
+        udp("2.2.2.2", dport=QUERY_PORT, payload=A2S_INFO_REQUEST, t=0.1),
+        udp("2.2.2.2", dport=QUERY_PORT, payload=b"\xff\xff\xff\xffU\xff\xff\xff\xff", t=0.2),  # A2S_PLAYER
+        udp(SERVER_IP, dst="1.1.1.1", sport=QUERY_PORT, dport=50000, size=350, t=0.3),
+        udp("3.3.3.3", dport=GAME_PORT, t=0.4),
+    ]
+    _, stats = PcapParser(server_ip=SERVER_IP).parse_pcap(pcap_builder(packets))
+
+    assert stats.query_port_packets == 4
+    assert stats.query_requests == 3
+    assert stats.query_responses == 1
+    assert stats.query_request_sources == 2
+    assert stats.query_request_bytes == sum(len(p) for p in packets[:3])
+    assert stats.query_response_bytes == len(packets[3])
+
+
+def test_query_counters_stay_zero_without_server_ip(pcap_builder):
+    from packets import A2S_INFO_REQUEST
+
+    _, stats = PcapParser().parse_pcap(pcap_builder([udp("1.1.1.1", dport=QUERY_PORT, payload=A2S_INFO_REQUEST)]))
+
+    assert stats.query_requests == 0 and stats.query_responses == 0 and stats.query_request_sources == 0

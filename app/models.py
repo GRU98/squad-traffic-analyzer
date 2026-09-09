@@ -48,6 +48,14 @@ class TrafficStats(BaseModel):
     game_port_packets: int = 0
     query_port_packets: int = 0
 
+    # Направление на query-порту (только при известном server_ip): запросы к серверу
+    # и его ответы. Используется детектором A2S query flood / amplification.
+    query_requests: int = 0
+    query_responses: int = 0
+    query_request_sources: int = 0
+    query_request_bytes: int = 0
+    query_response_bytes: int = 0
+
     top_talkers: list[dict[str, Any]] = Field(default_factory=list)
     protocol_distribution: dict[str, int] = Field(default_factory=dict)
     packet_size_distribution: dict[str, int] = Field(default_factory=dict)
