@@ -93,3 +93,4 @@ secrets/
 
 # Claude Code session state
 .claude/
+uv.lock
