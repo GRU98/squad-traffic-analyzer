@@ -132,12 +132,15 @@ traffic_analyzer/
 │   ├── Dockerfile              #   Python 3.11-slim image
 │   ├── docker-compose.yml      #   App + Redis + PostgreSQL + Nginx
 │   └── nginx/
-│       └── nginx.conf          #   Reverse proxy, SSL, rate limiting
+│       └── nginx.conf          #   Reverse proxy (HTTP), rate limiting
 │
-├── scripts/
-│   └── start.sh                # Unified launch script (6 commands)
+├── tests/                      # pytest suite (synthetic PCAPs, API, detectors)
 │
-├── requirements.txt            # Python dependencies
+├── .github/workflows/ci.yml    # CI: ruff + pytest on 3.11/3.12, Docker smoke test
+├── Makefile                    # docker compose + test/lint targets
+├── pyproject.toml              # pytest and ruff configuration
+├── requirements.txt            # Runtime dependencies
+├── requirements-dev.txt        # + pytest, ruff, httpx2
 ├── .env.example                # Configuration template
 ├── .gitignore
 ├── LICENSE
@@ -187,101 +190,62 @@ REDIS_PASSWORD=change_me         # Redis password
 
 ### Commands
 
-All operations through `scripts/start.sh`:
-
-```bash
-chmod +x scripts/start.sh
-```
+All operations go through the `Makefile`:
 
 | Command | Description |
 |---------|-------------|
-| `./scripts/start.sh dev` | Start locally in venv (development) |
-| `./scripts/start.sh prod` | Install & run as systemd service (production) |
-| `./scripts/start.sh docker` | Run full stack via Docker Compose |
-| `./scripts/start.sh stop` | Stop all running instances |
-| `./scripts/start.sh status` | Show status: Redis, API, Docker, PCAP files |
-| `./scripts/start.sh logs [app\|docker\|nginx]` | Tail logs from any component |
+| `make up` | Build and start the full Docker stack (App + Redis + PostgreSQL + Nginx) |
+| `make down` | Stop the stack |
+| `make restart` | Restart all containers |
+| `make rebuild` | Stop, rebuild images and start again |
+| `make status` | `docker compose ps` |
+| `make logs` / `make logs-app` | Tail logs of all containers / only the app |
+| `make clean` | Stop the stack and delete the Redis and PostgreSQL volumes |
+| `make venv` | Create `.venv` and install runtime + dev dependencies |
+| `make test` | Run the pytest suite |
+| `make lint` | `ruff check` + `ruff format --check` |
+| `make fmt` | Auto-format and auto-fix lint findings |
 
-#### `dev` — Development mode
-
-Starts a local server using a Python virtual environment. Ideal for testing.
+#### Docker Compose
 
 ```bash
-./scripts/start.sh dev
+cp .env.example .env
+nano .env        # passwords, SQUAD_SERVER_IP, CAPTURE_INTERFACE
+make up
+curl http://localhost/health      # via Nginx
+curl http://localhost:8000/health # direct
+```
+
+- Requires `.env` to exist
+- `data/`, `pcap_captures/`, and `logs/` are bind-mounted from the repository root; only
+  Redis and PostgreSQL data live in named Docker volumes (`redis-data`, `postgres-data`)
+- Nginx serves plain HTTP on port 80. Terminate TLS in front of it (a cloud load balancer,
+  Caddy, or your own Nginx) if the API is exposed publicly
+
+#### Local development
+
+```bash
+make venv
+cp .env.example .env
+cd app && ../.venv/bin/uvicorn main:app --reload
 # API available at http://localhost:8000
 # Swagger UI at  http://localhost:8000/docs
 ```
 
-- Auto-creates `venv/` if not present
-- Installs dependencies from `requirements.txt`
-- Creates `data/`, `pcap_captures/`, `logs/` directories
+Redis is optional for local runs: every Redis call is non-blocking and only logged on failure.
+Set `DATABASE_URL=sqlite:///./data/traffic_analyzer.db` (the default) to avoid PostgreSQL.
 
-#### `prod` — Production (systemd)
-
-Installs the app as a `traffic-analyzer` systemd service that survives reboots.
+#### Tests and lint
 
 ```bash
-sudo ./scripts/start.sh prod
-# Enables: systemctl enable --now traffic-analyzer
-# View logs: journalctl -u traffic-analyzer -f
+make test   # pytest — no Redis, no PostgreSQL, no tcpdump needed
+make lint   # ruff
 ```
 
-- Requires root
-- Creates `/etc/systemd/system/traffic-analyzer.service`
-- Restarts automatically on crash
-
-#### `docker` — Docker Compose
-
-Runs the full stack: **App + Redis + PostgreSQL + Nginx**.
-
-```bash
-./scripts/start.sh docker
-# API:     http://localhost:8000
-# Nginx:   requires SSL certs at docker/nginx/ssl/ — see SSL section below
-```
-
-> `docker/nginx/nginx.conf` always redirects port 80 to HTTPS and the HTTPS
-> server block requires `docker/nginx/ssl/cert.pem` + `key.pem` to exist. The
-> nginx container will fail to start without them — plain HTTP-only access via
-> Nginx is not supported as shipped.
-
-- Requires `.env` to exist (auto-prompted if not)
-- Creates `data/`, `pcap_captures/`, `logs/nginx/` directories
-- `data/`, `pcap_captures/`, and `logs/` are bind-mounted from the host; only
-  Redis and PostgreSQL data live in named Docker volumes (`redis-data`, `postgres-data`)
-
-#### `stop` — Stop everything
-
-```bash
-./scripts/start.sh stop
-# Stops systemd service (if running)
-# Stops Docker containers (if running)
-# Kills any dev process
-```
-
-#### `status` — Check status
-
-```bash
-./scripts/start.sh status
-# Outputs:
-# === System ===
-# Redis:  PONG
-# API:    {"status":"healthy",...}
-# === Systemd ===
-# active / not running
-# === Docker ===
-# Container status table
-# === PCAP files ===
-# Last 5 captured files
-```
-
-#### `logs` — View logs
-
-```bash
-./scripts/start.sh logs             # systemd app logs (default)
-./scripts/start.sh logs docker      # Docker container logs
-./scripts/start.sh logs nginx       # Nginx access log
-```
+The suite builds synthetic PCAP files with Scapy, so the parser, detectors, scoring, API
+(including API-key handling and path restrictions), notifications, and scheduler are all
+exercised end-to-end. CI runs the same checks on Python 3.11 and 3.12 and smoke-tests the
+Docker image.
 
 ---
 
@@ -330,7 +294,7 @@ Swagger UI: `http://your-server:8000/docs` (disabled in production mode)
 | `GET` | `/health` | — | Health check: API + Redis status |
 | `GET` | `/mode` | ✓ | Current mode and capture config |
 | `POST` | `/analyze/upload` | ✓ | Upload PCAP file for analysis |
-| `POST` | `/analyze/path` | ✓ | Analyze PCAP file by server path |
+| `POST` | `/analyze/path` | ✓ | Analyze PCAP file by server path (inside `PCAP_DIR` only, else `403`) |
 | `POST` | `/capture/start` | ✓ | Start tcpdump capture (async) |
 | `POST` | `/capture/analyze-latest` | ✓ | Analyze most recent PCAP file |
 | `GET` | `/history` | ✓ | Analysis history (`limit`, most recent first) |
@@ -338,7 +302,7 @@ Swagger UI: `http://your-server:8000/docs` (disabled in production mode)
 | `GET` | `/stats/realtime` | ✓ | Live stats from Redis |
 | `DELETE` | `/cleanup` | ✓ | Delete old data + PCAP files |
 
-> ✓ = requires `X-API-Key` header when `API_KEY_ENABLED=true`
+> ✓ = requires `X-API-Key` header when `API_KEY_ENABLED=true`. If the flag is on but `API_KEY` is empty, every protected route answers `503` instead of silently allowing access.
 
 #### Request Examples
 
@@ -353,8 +317,8 @@ curl -X POST "http://localhost:8000/analyze/upload?server_ip=1.2.3.4&game_port=7
   -H "X-API-Key: your_key" \
   -F "file=@/path/to/capture.pcap"
 
-# Analyze by path (file already on server) — all fields are query parameters
-curl -X POST "http://localhost:8000/analyze/path?pcap_path=/opt/squad/pcap_captures/capture.pcap&server_ip=1.2.3.4&game_port=7787&query_port=27165" \
+# Analyze by path (file already on server, must be inside PCAP_DIR) — all fields are query parameters
+curl -X POST "http://localhost:8000/analyze/path?pcap_path=/app/pcap_captures/capture.pcap&server_ip=1.2.3.4&game_port=7787&query_port=27165" \
   -H "X-API-Key: your_key"
 
 # Start tcpdump capture for 60 seconds
@@ -450,7 +414,7 @@ order is not guaranteed to match the order anomalies were processed in.
 |------|---------|----------|
 | `high_pps` | PPS > `ANOMALY_THRESHOLD_PPS` (default: 10,000) | up to 1.0 |
 | `high_bps` | BPS > `ANOMALY_THRESHOLD_BPS` (default: 100 MB/s) | up to 1.0 |
-| `port_scan` | Single IP hits > 20 unique ports (hardcoded — `ANOMALY_THRESHOLD_PORT_SCAN` is defined but not read by the detector) | up to 1.0 |
+| `port_scan` | Single IP hits > `ANOMALY_THRESHOLD_PORT_SCAN` unique destination ports (default: 20) | up to 1.0 |
 | `suspicious_pattern` | SYN flood (>100 SYN packets with no ACK from one IP) or a flood of >500 packets under 64 bytes from one IP | up to 1.0 |
 | `ddos_attack` | One of the top-10 IPs by packet count sends >30% of traffic (and >1000 packets), or unique IP count exceeds `ANOMALY_THRESHOLD_CONNECTIONS` while PPS > 1000 | up to 1.0 |
 | `malformed_packet` | >50 UDP packets on the game/query port with length <20 or >1500 bytes | up to 1.0 |
@@ -458,6 +422,12 @@ order is not guaranteed to match the order anomalies were processed in.
 
 There is no dedicated `syn_flood` or `ddos_single_source` type — both cases above are
 reported under `suspicious_pattern` / `ddos_attack`, distinguishable only by `description`.
+
+When `server_ip` is known (query parameter, or `SQUAD_SERVER_IP` for captures), packets
+**sent by the server** are excluded from the per-source rules (`port_scan`, `suspicious_pattern`,
+`ddos_attack`, `malformed_packet`). A busy server answers dozens of client ports and produces
+most of the bytes on the wire, which would otherwise look like a port scan or a DDoS source.
+Always pass `server_ip` for accurate results.
 
 #### ML Detection (Isolation Forest)
 
@@ -471,10 +441,12 @@ per **1-second time window** (not per IP):
 Anomaly score threshold controlled by `ML_MODEL_CONTAMINATION` (default: `0.1` = 10% expected anomalies).
 The model is retrained from scratch on every analysis — there is no persisted baseline.
 
-> **Known issue:** `_detect_ml_anomalies` indexes `packets[i]` using indices produced
-> against the per-window feature matrix, so once a capture spans more than 100
-> one-second windows the reported `anomaly_percentage` and `top_sources` no longer
-> correspond to the actual anomalous packets. Tracked as a GitHub issue.
+Isolation Forest with a fixed contamination always marks *some* windows as outliers, even on
+perfectly flat traffic. A flagged window is therefore only reported when its packet count or
+byte volume is at least **2× the median window**. The anomaly is attributed to the packets
+that actually fall into the flagged windows: `anomaly_count` / `anomaly_percentage` count those
+packets, `top_sources` ranks their source IPs, and `details.windows` lists the offending
+seconds (offset from the first packet). `ML_ENABLED=false` skips the model entirely.
 
 #### Risk Score Calculation
 
@@ -580,6 +552,7 @@ CONTINUOUS_INTERVAL_SECONDS=300
 SCHEDULED_CRON=0 */6 * * *
 CAPTURE_INTERFACE=ens6
 CAPTURE_DURATION_SECONDS=60
+PCAP_DIR=/app/pcap_captures   # captures are written here; /analyze/path accepts only files inside it
 PCAP_RETENTION_DAYS=7
 ```
 </details>
@@ -649,23 +622,38 @@ apt update && apt install -y python3 python3-venv redis-server tcpdump libpcap-d
 systemctl enable --now redis-server
 redis-cli ping   # PONG
 
-# 3. Create directories
-mkdir -p /opt/squad/traffic_analyzer/{data,pcap_captures,logs}
-
-# 4. Deploy code
+# 3. Deploy code
+git clone https://github.com/GRU98/squad-traffic-analyzer.git /opt/squad/traffic_analyzer
 cd /opt/squad/traffic_analyzer
-# (upload files via scp or git clone)
+mkdir -p data pcap_captures logs
 
-# 5. Setup venv
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
+# 4. Setup venv
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
 
-# 6. Configure
-cp .env.example .env && nano .env
+# 5. Configure
+cp .env.example .env && nano .env   # set PCAP_DIR=/opt/squad/traffic_analyzer/pcap_captures
 
-# 7. Start
-sudo ./scripts/start.sh prod
+# 6. Run (or wrap this command in a systemd unit)
+cd app && ../.venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000
+```
+
+Example systemd unit (`/etc/systemd/system/traffic-analyzer.service`):
+
+```ini
+[Unit]
+Description=Squad Traffic Analyzer
+After=network.target redis-server.service
+
+[Service]
+WorkingDirectory=/opt/squad/traffic_analyzer/app
+EnvironmentFile=/opt/squad/traffic_analyzer/.env
+ExecStart=/opt/squad/traffic_analyzer/.venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000
+Restart=on-failure
+AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
+
+[Install]
+WantedBy=multi-user.target
 ```
 
 #### Docker Compose — Full Stack
@@ -674,7 +662,7 @@ sudo ./scripts/start.sh prod
 cp .env.example .env
 nano .env   # set passwords and server IP
 
-./scripts/start.sh docker
+make up
 
 # Verify
 curl http://localhost/health
@@ -684,20 +672,7 @@ Stack includes:
 - `squad-traffic-analyzer` — FastAPI app (port 8000)
 - `squad-redis` — Redis with password + memory limit
 - `squad-postgres` — PostgreSQL 15
-- `squad-nginx` — Reverse proxy on port 80/443
-
-#### SSL with Let's Encrypt (optional)
-
-```bash
-apt install certbot python3-certbot-nginx
-certbot certonly --standalone -d yourdomain.com
-
-# Copy certs to nginx ssl folder
-cp /etc/letsencrypt/live/yourdomain.com/fullchain.pem docker/nginx/ssl/cert.pem
-cp /etc/letsencrypt/live/yourdomain.com/privkey.pem docker/nginx/ssl/key.pem
-
-./scripts/start.sh docker
-```
+- `squad-nginx` — Reverse proxy on port 80 (HTTP only; put a TLS terminator in front for public exposure)
 
 ---
 
@@ -705,20 +680,22 @@ cp /etc/letsencrypt/live/yourdomain.com/privkey.pem docker/nginx/ssl/key.pem
 
 | Problem | Cause | Fix |
 |---------|-------|-----|
-| `"redis": "unavailable"` in `/health` | Redis down, wrong `REDIS_HOST`, or bad `REDIS_PASSWORD` | `redis-cli -h $REDIS_HOST ping`; check `./scripts/start.sh logs` |
-| `Address already in use` | Old process still running | `./scripts/start.sh stop` |
+| `"redis": "unavailable"` in `/health` | Redis down, wrong `REDIS_HOST`, or bad `REDIS_PASSWORD` | `redis-cli -h $REDIS_HOST ping`; check `make logs` |
+| `Address already in use` | Old process still running | `make down`, or `ss -tlpn \| grep 8000` and stop the process |
 | `0 packets captured` | Wrong interface or Squad not running | `ip a` → find interface; `ss -tulpn \| grep 7787` |
 | `tcpdump: Operation not permitted` | No raw socket permission | `setcap cap_net_raw,cap_net_admin=eip /usr/bin/tcpdump` |
-| `No module named 'traffic_analyzer'` | Wrong working dir or relative imports | Run from `app/` directory or use `./scripts/start.sh` |
+| `No module named 'analyzer'` | Wrong working dir (modules import each other as top-level names) | Run uvicorn from the `app/` directory |
 | Redis `NOAUTH` error | Password not set in `.env` | Set `REDIS_PASSWORD` in `.env` |
-| Docker build fails | Missing `.env` or wrong paths | Run from project root, not `docker/` |
+| Docker build fails | Missing `.env` or wrong paths | Run `make up` from the project root, not `docker/` |
+| `403` on `/analyze/path` | The file is outside `PCAP_DIR` | Move it into `PCAP_DIR` or upload it via `/analyze/upload` |
+| `503` on every protected route | `API_KEY_ENABLED=true` but `API_KEY` is empty | Set `API_KEY` (e.g. `openssl rand -hex 16`) |
 
 ```bash
 # Universal debug command
-./scripts/start.sh status
+make status
 
 # Full logs dump
-./scripts/start.sh logs app
+make logs-app
 ```
 
 ---
@@ -839,12 +816,15 @@ traffic_analyzer/
 │   ├── Dockerfile              #   Python 3.11-slim образ
 │   ├── docker-compose.yml      #   App + Redis + PostgreSQL + Nginx
 │   └── nginx/
-│       └── nginx.conf          #   Reverse proxy, SSL, rate limiting
+│       └── nginx.conf          #   Reverse proxy (HTTP), rate limiting
 │
-├── scripts/
-│   └── start.sh                # Единый скрипт запуска (6 команд)
+├── tests/                      # pytest-тесты (синтетические PCAP, API, детекторы)
 │
-├── requirements.txt            # Python зависимости
+├── .github/workflows/ci.yml    # CI: ruff + pytest на 3.11/3.12, smoke-тест Docker
+├── Makefile                    # docker compose + test/lint цели
+├── pyproject.toml              # конфигурация pytest и ruff
+├── requirements.txt            # Runtime-зависимости
+├── requirements-dev.txt        # + pytest, ruff, httpx2
 ├── .env.example                # Шаблон конфигурации
 ├── .gitignore
 ├── LICENSE
@@ -892,99 +872,63 @@ REDIS_PASSWORD=change_me         # Пароль Redis
 
 ### Команды
 
-Все операции через `scripts/start.sh`:
-
-```bash
-chmod +x scripts/start.sh
-```
+Все операции — через `Makefile`:
 
 | Команда | Описание |
 |---------|----------|
-| `./scripts/start.sh dev` | Запустить локально в venv (разработка) |
-| `./scripts/start.sh prod` | Установить и запустить как systemd сервис |
-| `./scripts/start.sh docker` | Запустить полный стек через Docker Compose |
-| `./scripts/start.sh stop` | Остановить все запущенные экземпляры |
-| `./scripts/start.sh status` | Статус: Redis, API, Docker, PCAP файлы |
-| `./scripts/start.sh logs [app\|docker\|nginx]` | Логи любого компонента |
+| `make up` | Собрать и запустить полный Docker-стек (App + Redis + PostgreSQL + Nginx) |
+| `make down` | Остановить стек |
+| `make restart` | Перезапустить контейнеры |
+| `make rebuild` | Остановить, пересобрать образы и запустить снова |
+| `make status` | `docker compose ps` |
+| `make logs` / `make logs-app` | Логи всех контейнеров / только приложения |
+| `make clean` | Остановить стек и удалить volumes Redis и PostgreSQL |
+| `make venv` | Создать `.venv` и установить runtime + dev зависимости |
+| `make test` | Запустить pytest |
+| `make lint` | `ruff check` + `ruff format --check` |
+| `make fmt` | Автоформатирование и автоисправление замечаний ruff |
 
-#### `dev` — Режим разработки
-
-Запускает локальный сервер через Python venv. Идеально для тестирования.
-
-```bash
-./scripts/start.sh dev
-# API:      http://localhost:8000
-# Swagger:  http://localhost:8000/docs
-```
-
-- Авто-создаёт `venv/` если нет
-- Устанавливает зависимости из `requirements.txt`
-- Создаёт `data/`, `pcap_captures/`, `logs/`
-
-#### `prod` — Production (systemd)
-
-Устанавливает приложение как systemd сервис `traffic-analyzer`.
+#### Docker Compose
 
 ```bash
-sudo ./scripts/start.sh prod
-# Включает: systemctl enable --now traffic-analyzer
-# Логи:     journalctl -u traffic-analyzer -f
+cp .env.example .env
+nano .env        # пароли, SQUAD_SERVER_IP, CAPTURE_INTERFACE
+make up
+curl http://localhost/health      # через Nginx
+curl http://localhost:8000/health # напрямую
 ```
 
-- Требует root
-- Создаёт `/etc/systemd/system/traffic-analyzer.service`
-- Автоматически перезапускается при падении
+- Требуется файл `.env`
+- `data/`, `pcap_captures/` и `logs/` монтируются из корня репозитория; данные Redis и
+  PostgreSQL живут в именованных volumes (`redis-data`, `postgres-data`)
+- Nginx отдаёт обычный HTTP на порту 80. Если API публичный, терминируйте TLS перед ним
+  (облачный балансировщик, Caddy или собственный Nginx)
 
-#### `docker` — Docker Compose
-
-Запускает полный стек: **App + Redis + PostgreSQL + Nginx**.
+#### Локальная разработка
 
 ```bash
-./scripts/start.sh docker
-# API:    http://localhost:8000
-# Nginx:  требует SSL-сертификаты в docker/nginx/ssl/ — см. раздел SSL ниже
+make venv
+cp .env.example .env
+cd app && ../.venv/bin/uvicorn main:app --reload
+# API: http://localhost:8000
+# Swagger UI: http://localhost:8000/docs
 ```
 
-> `docker/nginx/nginx.conf` всегда редиректит порт 80 на HTTPS, а HTTPS-блок
-> требует наличия `docker/nginx/ssl/cert.pem` и `key.pem`. Без них контейнер
-> nginx не запустится — доступ только по HTTP «из коробки» не поддерживается.
+Redis для локального запуска необязателен: все обращения к нему неблокирующие и при
+ошибке только логируются. `DATABASE_URL=sqlite:///./data/traffic_analyzer.db` (по умолчанию)
+позволяет обойтись без PostgreSQL.
 
-- Требует наличия `.env` (подсказывает если нет)
-- Создаёт все нужные директории
-- `data/`, `pcap_captures/` и `logs/` монтируются с хоста; в именованных Docker
-  volumes (`redis-data`, `postgres-data`) хранятся только Redis и PostgreSQL
-
-#### `stop` — Остановить всё
+#### Тесты и линтер
 
 ```bash
-./scripts/start.sh stop
-# Остановит systemd сервис (если запущен)
-# Остановит Docker контейнеры (если запущены)
-# Убьёт dev процесс
+make test   # pytest — без Redis, PostgreSQL и tcpdump
+make lint   # ruff
 ```
 
-#### `status` — Проверить статус
-
-```bash
-./scripts/start.sh status
-# === System ===
-# Redis:  PONG
-# API:    {"status":"healthy",...}
-# === Systemd ===
-# active / not running
-# === Docker ===
-# Таблица контейнеров
-# === PCAP files ===
-# Последние 5 захваченных файлов
-```
-
-#### `logs` — Просмотр логов
-
-```bash
-./scripts/start.sh logs             # логи приложения (systemd)
-./scripts/start.sh logs docker      # логи Docker контейнера
-./scripts/start.sh logs nginx       # логи Nginx access.log
-```
+Тесты собирают синтетические PCAP через Scapy, поэтому парсер, детекторы, скоринг, API
+(включая проверку API-ключа и ограничение путей), уведомления и планировщик проверяются
+сквозным образом. CI выполняет те же проверки на Python 3.11 и 3.12 и делает smoke-тест
+Docker-образа.
 
 ---
 
@@ -1007,6 +951,7 @@ AUTO_CAPTURE_ENABLED=true
 CONTINUOUS_INTERVAL_SECONDS=300    # каждые 5 минут
 CAPTURE_DURATION_SECONDS=60        # окно захвата
 CAPTURE_INTERFACE=ens6
+PCAP_DIR=/app/pcap_captures        # сюда пишутся захваты; /analyze/path принимает только файлы отсюда
 ```
 
 #### `scheduled`
@@ -1033,7 +978,7 @@ Swagger UI: `http://твой-сервер:8000/docs` (отключён в produc
 | `GET` | `/health` | — | Health check: API + Redis |
 | `GET` | `/mode` | ✓ | Текущий режим и настройки захвата |
 | `POST` | `/analyze/upload` | ✓ | Загрузить PCAP для анализа |
-| `POST` | `/analyze/path` | ✓ | Анализировать PCAP по пути на сервере |
+| `POST` | `/analyze/path` | ✓ | Анализировать PCAP по пути на сервере (только внутри `PCAP_DIR`, иначе `403`) |
 | `POST` | `/capture/start` | ✓ | Запустить tcpdump захват (async) |
 | `POST` | `/capture/analyze-latest` | ✓ | Анализировать последний PCAP |
 | `GET` | `/history` | ✓ | История анализов (`limit`, новые первыми) |
@@ -1055,8 +1000,8 @@ curl -X POST "http://localhost:8000/analyze/upload?server_ip=1.2.3.4" \
   -H "X-API-Key: your_key" \
   -F "file=@/path/to/capture.pcap"
 
-# Анализировать файл по пути на сервере — все параметры передаются в query-строке
-curl -X POST "http://localhost:8000/analyze/path?pcap_path=/opt/squad/pcap_captures/capture.pcap&server_ip=1.2.3.4&game_port=7787&query_port=27165" \
+# Анализировать файл по пути на сервере (только внутри PCAP_DIR) — все параметры в query-строке
+curl -X POST "http://localhost:8000/analyze/path?pcap_path=/app/pcap_captures/capture.pcap&server_ip=1.2.3.4&game_port=7787&query_port=27165" \
   -H "X-API-Key: your_key"
 
 # Запустить захват на 60 секунд
@@ -1174,7 +1119,7 @@ WEBHOOK_URL=https://your-service.com/hooks/squad-alerts
 |-----|---------|----------|
 | `high_pps` | PPS > `ANOMALY_THRESHOLD_PPS` (default: 10 000) | до 1.0 |
 | `high_bps` | BPS > `ANOMALY_THRESHOLD_BPS` (default: 100 МБ/с) | до 1.0 |
-| `port_scan` | Один IP → более 20 уникальных портов (порог захардкожен — `ANOMALY_THRESHOLD_PORT_SCAN` задан в настройках, но детектором не читается) | до 1.0 |
+| `port_scan` | Один IP → более `ANOMALY_THRESHOLD_PORT_SCAN` уникальных портов назначения (default: 20) | до 1.0 |
 | `suspicious_pattern` | SYN flood (>100 SYN-пакетов без ACK с одного IP) либо поток из >500 пакетов короче 64 байт с одного IP | до 1.0 |
 | `ddos_attack` | Один из топ-10 IP по числу пакетов даёт >30% трафика (и >1000 пакетов), либо число уникальных IP превышает `ANOMALY_THRESHOLD_CONNECTIONS` при PPS > 1000 | до 1.0 |
 | `malformed_packet` | >50 UDP-пакетов на игровом/query-порту с длиной <20 или >1500 байт | до 1.0 |
@@ -1182,6 +1127,12 @@ WEBHOOK_URL=https://your-service.com/hooks/squad-alerts
 
 Отдельных типов `syn_flood` или `ddos_single_source` не существует — оба случая
 попадают в `suspicious_pattern` / `ddos_attack`, различить их можно только по `description`.
+
+Если известен `server_ip` (query-параметр или `SQUAD_SERVER_IP` для захватов), пакеты,
+**отправленные сервером**, исключаются из правил «по источнику» (`port_scan`, `suspicious_pattern`,
+`ddos_attack`, `malformed_packet`). Нагруженный сервер отвечает десяткам клиентских портов и
+генерирует большую часть байтов — без фильтра это выглядит как сканирование портов или DDoS.
+Для точного результата всегда передавайте `server_ip`.
 
 #### ML-детекция (Isolation Forest)
 
@@ -1195,10 +1146,12 @@ WEBHOOK_URL=https://your-service.com/hooks/squad-alerts
 Порог задаётся `ML_MODEL_CONTAMINATION` (default: `0.1` = ожидается 10% аномалий).
 Модель переобучается заново на каждый анализ — сохранённого baseline между запусками нет.
 
-> **Известная проблема:** `_detect_ml_anomalies` использует индексы из матрицы
-> признаков (одна строка на окно) как индексы в списке пакетов (`packets[i]`).
-> Как только захват превышает 100 окон, `anomaly_percentage` и `top_sources`
-> перестают соответствовать реальным аномальным пакетам. Заведён как issue на GitHub.
+Isolation Forest с фиксированным contamination всегда помечает *какие-то* окна как выбросы,
+даже на идеально ровном трафике. Поэтому помеченное окно попадает в отчёт только если число
+пакетов или объём байтов в нём не меньше **2× медианного окна**. Аномалия атрибутируется
+пакетам, реально попавшим в помеченные окна: `anomaly_count` / `anomaly_percentage` считают
+именно их, `top_sources` ранжирует их source IP, а `details.windows` перечисляет секунды
+(смещение от первого пакета). `ML_ENABLED=false` полностью отключает модель.
 
 #### Оценка риска
 
@@ -1248,29 +1201,44 @@ PPS: 1424
 
 ```bash
 # 1. Системные зависимости
-apt update && apt install -y \
-    python3 python3-venv redis-server tcpdump libpcap-dev
+apt update && apt install -y python3 python3-venv redis-server tcpdump libpcap-dev
 
 # 2. Запустить Redis
 systemctl enable --now redis-server
 redis-cli ping   # PONG
 
-# 3. Создать директории
-mkdir -p /opt/squad/traffic_analyzer/{data,pcap_captures,logs}
-
-# 4. Загрузить код (scp или git clone)
+# 3. Код
+git clone https://github.com/GRU98/squad-traffic-analyzer.git /opt/squad/traffic_analyzer
 cd /opt/squad/traffic_analyzer
+mkdir -p data pcap_captures logs
 
-# 5. Виртуальное окружение
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
+# 4. Виртуальное окружение
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
 
-# 6. Конфигурация
-cp .env.example .env && nano .env
+# 5. Конфигурация
+cp .env.example .env && nano .env   # укажите PCAP_DIR=/opt/squad/traffic_analyzer/pcap_captures
 
-# 7. Запуск
-sudo ./scripts/start.sh prod
+# 6. Запуск (или оберните команду в systemd unit)
+cd app && ../.venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000
+```
+
+Пример systemd unit (`/etc/systemd/system/traffic-analyzer.service`):
+
+```ini
+[Unit]
+Description=Squad Traffic Analyzer
+After=network.target redis-server.service
+
+[Service]
+WorkingDirectory=/opt/squad/traffic_analyzer/app
+EnvironmentFile=/opt/squad/traffic_analyzer/.env
+ExecStart=/opt/squad/traffic_analyzer/.venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000
+Restart=on-failure
+AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
+
+[Install]
+WantedBy=multi-user.target
 ```
 
 #### Docker Compose
@@ -1279,7 +1247,7 @@ sudo ./scripts/start.sh prod
 cp .env.example .env
 nano .env   # пароли и IP сервера
 
-./scripts/start.sh docker
+make up
 
 curl http://localhost/health
 ```
@@ -1288,19 +1256,7 @@ curl http://localhost/health
 - `squad-traffic-analyzer` — FastAPI (порт 8000)
 - `squad-redis` — Redis с паролем + лимит памяти
 - `squad-postgres` — PostgreSQL 15
-- `squad-nginx` — Reverse proxy 80/443
-
-#### SSL через Let's Encrypt
-
-```bash
-apt install certbot
-certbot certonly --standalone -d yourdomain.com
-
-cp /etc/letsencrypt/live/yourdomain.com/fullchain.pem docker/nginx/ssl/cert.pem
-cp /etc/letsencrypt/live/yourdomain.com/privkey.pem docker/nginx/ssl/key.pem
-
-./scripts/start.sh docker
-```
+- `squad-nginx` — Reverse proxy на порту 80 (только HTTP; для публичного доступа поставьте TLS-терминатор перед ним)
 
 ---
 
@@ -1309,18 +1265,20 @@ cp /etc/letsencrypt/live/yourdomain.com/privkey.pem docker/nginx/ssl/key.pem
 | Проблема | Причина | Решение |
 |----------|---------|---------|
 | `"redis": "unavailable"` в `/health` | Redis не запущен, неверный `REDIS_HOST` или `REDIS_PASSWORD` | `redis-cli -h $REDIS_HOST ping`; `systemctl start redis-server` |
-| `Address already in use` | Старый процесс жив | `./scripts/start.sh stop` |
+| `Address already in use` | Старый процесс жив | `make down`, либо `ss -tlpn \| grep 8000` и остановить процесс |
 | `0 packets captured` | Неверный интерфейс / Squad не запущен | `ip a` → `ss -tulpn \| grep 7787` |
 | `Operation not permitted` | Нет прав на raw socket | `setcap cap_net_raw,cap_net_admin=eip /usr/bin/tcpdump` |
-| `No module named 'traffic_analyzer'` | Неверная рабочая директория | Используй `./scripts/start.sh` |
+| `No module named 'analyzer'` | Неверная рабочая директория (модули импортируют друг друга как top-level) | Запускать uvicorn из директории `app/` |
 | Redis `NOAUTH` | Не задан `REDIS_PASSWORD` | Добавить в `.env` |
+| `403` на `/analyze/path` | Файл вне `PCAP_DIR` | Переместить в `PCAP_DIR` или загрузить через `/analyze/upload` |
+| `503` на всех защищённых маршрутах | `API_KEY_ENABLED=true`, но `API_KEY` пуст | Задать `API_KEY` (например, `openssl rand -hex 16`) |
 
 ```bash
 # Универсальная диагностика
-./scripts/start.sh status
+make status
 
 # Полные логи
-./scripts/start.sh logs
+make logs-app
 ```
 
 ---
