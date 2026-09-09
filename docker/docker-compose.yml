@@ -56,7 +56,7 @@ services:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - REDIS_PASSWORD=${REDIS_PASSWORD:-changeme}
-      - DATABASE_URL=postgresql://squad_analyzer:${DB_PASSWORD:-changeme}@postgres:5432/traffic_analyzer
+      - DATABASE_URL=postgresql+psycopg2://squad_analyzer:${DB_PASSWORD:-changeme}@postgres:5432/traffic_analyzer
       - SQUAD_SERVER_IP=${SQUAD_SERVER_IP:-}
       - SQUAD_GAME_PORT=${SQUAD_GAME_PORT:-7787}
       - SQUAD_QUERY_PORT=${SQUAD_QUERY_PORT:-27165}

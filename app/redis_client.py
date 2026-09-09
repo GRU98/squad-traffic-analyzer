@@ -5,6 +5,8 @@ import logging
 from datetime import datetime, timedelta
 
 import redis
+from redis.backoff import ExponentialBackoff
+from redis.retry import Retry
 
 from config import settings
 
@@ -23,6 +25,9 @@ class RedisClient:
             decode_responses=True,
             socket_connect_timeout=2,
             socket_timeout=5,
+            # redis-py >= 8 по умолчанию делает 10 повторов с backoff — недоступный Redis
+            # блокировал бы каждый анализ на ~30 с. Один быстрый повтор достаточно.
+            retry=Retry(ExponentialBackoff(cap=0.5, base=0.1), 1),
         )
 
     def store_realtime_stats(self, stats: dict, ttl: int = 3600):
