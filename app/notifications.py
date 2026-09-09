@@ -1,14 +1,17 @@
 """Рассылка алертов по каналам Telegram / Webhook / Email на основе результата анализа."""
 
+import asyncio
 import logging
-import aiohttp
 import smtplib
-from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from typing import Optional
+from email.mime.text import MIMEText
+
+import aiohttp
 
 from config import settings
 from models import AnalysisResult
+
+HTTP_TIMEOUT = aiohttp.ClientTimeout(total=15)
 
 logger = logging.getLogger(__name__)
 
@@ -66,17 +69,12 @@ class NotificationService:
     async def _send_telegram(self, message: str):
         """Отправить message через Telegram Bot API в TELEGRAM_CHAT_ID."""
         url = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/sendMessage"
-        payload = {
-            "chat_id": settings.TELEGRAM_CHAT_ID,
-            "text": message,
-            "parse_mode": "HTML"
-        }
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, json=payload) as resp:
-                if resp.status == 200:
-                    logger.info("Telegram alert sent")
-                else:
-                    logger.error(f"Telegram error: {resp.status}")
+        payload = {"chat_id": settings.TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"}
+        async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT) as session, session.post(url, json=payload) as resp:
+            if resp.status == 200:
+                logger.info("Telegram alert sent")
+            else:
+                logger.error(f"Telegram error: {resp.status}")
 
     async def _send_webhook(self, result: AnalysisResult):
         """POST-нуть структурированный JSON о найденных аномалиях на WEBHOOK_URL."""
@@ -87,32 +85,36 @@ class NotificationService:
             "anomalies_count": len(result.anomalies),
             "analysis_id": result.analysis_id,
             "timestamp": str(result.timestamp),
-            "anomalies": [
-                {"type": a.type, "severity": a.severity, "source_ip": a.source_ip}
-                for a in result.anomalies
-            ]
+            "anomalies": [{"type": a.type, "severity": a.severity, "source_ip": a.source_ip} for a in result.anomalies],
         }
-        async with aiohttp.ClientSession() as session:
-            async with session.post(settings.WEBHOOK_URL, json=payload) as resp:
-                if resp.status in (200, 201, 204):
-                    logger.info("Webhook sent")
-                else:
-                    logger.error(f"Webhook error: {resp.status}")
+        async with (
+            aiohttp.ClientSession(timeout=HTTP_TIMEOUT) as session,
+            session.post(settings.WEBHOOK_URL, json=payload) as resp,
+        ):
+            if resp.status in (200, 201, 204):
+                logger.info("Webhook sent")
+            else:
+                logger.error(f"Webhook error: {resp.status}")
 
     async def _send_email(self, message: str, result: AnalysisResult):
-        """Отправить message по SMTP (STARTTLS) с EMAIL_FROM на EMAIL_TO."""
+        """Отправить message по SMTP (STARTTLS) с EMAIL_FROM на EMAIL_TO. smtplib блокирующий — уходит в поток."""
         msg = MIMEMultipart()
         msg["From"] = settings.EMAIL_FROM
         msg["To"] = settings.EMAIL_TO
-        msg["Subject"] = f"[Squad Analyzer] {'АТАКА' if result.is_under_attack else 'Аномалия'} Risk={result.risk_score:.2f}"
+        msg["Subject"] = (
+            f"[Squad Analyzer] {'АТАКА' if result.is_under_attack else 'Аномалия'} Risk={result.risk_score:.2f}"
+        )
         msg.attach(MIMEText(message, "plain"))
 
-        try:
-            with smtplib.SMTP(settings.EMAIL_SMTP_HOST, settings.EMAIL_SMTP_PORT) as server:
+        def deliver():
+            with smtplib.SMTP(settings.EMAIL_SMTP_HOST, settings.EMAIL_SMTP_PORT, timeout=15) as server:
                 server.starttls()
                 server.login(settings.EMAIL_FROM, settings.EMAIL_PASSWORD)
                 server.sendmail(settings.EMAIL_FROM, settings.EMAIL_TO, msg.as_string())
-                logger.info("Email alert sent")
+
+        try:
+            await asyncio.to_thread(deliver)
+            logger.info("Email alert sent")
         except Exception as e:
             logger.error(f"Email failed: {e}")
 

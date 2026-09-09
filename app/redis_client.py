@@ -1,10 +1,10 @@
 """Тонкая обёртка над redis-py: real-time статистика, алерты, счётчики, очистка."""
 
-import redis
 import json
-from typing import Optional, Dict
-from datetime import datetime, timedelta
 import logging
+from datetime import datetime, timedelta
+
+import redis
 
 from config import settings
 
@@ -20,18 +20,20 @@ class RedisClient:
             port=settings.REDIS_PORT,
             db=settings.REDIS_DB,
             password=settings.REDIS_PASSWORD,
-            decode_responses=True
+            decode_responses=True,
+            socket_connect_timeout=2,
+            socket_timeout=5,
         )
 
-    def store_realtime_stats(self, stats: Dict, ttl: int = 3600):
-        """Сохранить снимок статистики под ключом stats:<timestamp> с истечением через ttl секунд."""
+    def store_realtime_stats(self, stats: dict, ttl: int = 3600):
+        """Сохранить снимок статистики под ключом stats:<timestamp с микросекундами>, истекает через ttl секунд."""
         try:
-            key = f"stats:{datetime.now().strftime('%Y%m%d%H%M%S')}"
+            key = f"stats:{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
             self.client.setex(key, ttl, json.dumps(stats))
             logger.info(f"Stored stats in Redis: {key}")
         except Exception as e:
             logger.error(f"Failed to store stats in Redis: {e}")
-    
+
     def get_recent_stats(self, hours: int = 1) -> list:
         """Вернуть все снимки статистики, ещё не истёкшие в Redis (ключи stats:*).
 
@@ -39,20 +41,17 @@ class RedisClient:
         определяется только TTL, заданным в store_realtime_stats.
         """
         try:
-            pattern = "stats:*"
-            keys = self.client.keys(pattern)
-            
             stats_list = []
-            for key in keys:
+            for key in self.client.scan_iter("stats:*"):
                 data = self.client.get(key)
                 if data:
                     stats_list.append(json.loads(data))
-            
+
             return stats_list
         except Exception as e:
             logger.error(f"Failed to get stats from Redis: {e}")
             return []
-    
+
     def increment_counter(self, counter_name: str, amount: int = 1):
         """Атомарно увеличить именованный счётчик Redis на amount (INCRBY)."""
         try:
@@ -68,20 +67,20 @@ class RedisClient:
         except Exception as e:
             logger.error(f"Failed to get counter: {e}")
             return 0
-    
-    def store_anomaly_alert(self, anomaly: Dict):
+
+    def store_anomaly_alert(self, anomaly: dict):
         """Сохранить аномалию под ключом anomaly:<timestamp> (TTL 24ч) и в списке recent_anomalies (последние 100)."""
         try:
-            key = f"anomaly:{datetime.now().strftime('%Y%m%d%H%M%S')}"
+            key = f"anomaly:{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
             self.client.setex(key, 86400, json.dumps(anomaly))
-            
+
             self.client.lpush("recent_anomalies", json.dumps(anomaly))
             self.client.ltrim("recent_anomalies", 0, 99)
-            
+
             logger.info(f"Stored anomaly alert: {key}")
         except Exception as e:
             logger.error(f"Failed to store anomaly: {e}")
-    
+
     def get_recent_anomalies(self, limit: int = 10) -> list:
         """Вернуть до limit последних аномалий из списка recent_anomalies (новые первыми)."""
         try:
@@ -90,7 +89,7 @@ class RedisClient:
         except Exception as e:
             logger.error(f"Failed to get anomalies: {e}")
             return []
-    
+
     def cleanup_old_data(self):
         """Удалить stats:* ключи старше settings.STATS_RETENTION_HOURS.
 
@@ -99,18 +98,15 @@ class RedisClient:
         """
         try:
             cutoff = datetime.now() - timedelta(hours=settings.STATS_RETENTION_HOURS)
-            cutoff_str = cutoff.strftime('%Y%m%d%H%M%S')
-            
-            pattern = "stats:*"
-            keys = self.client.keys(pattern)
-            
+            cutoff_str = cutoff.strftime("%Y%m%d%H%M%S%f")
+
             deleted = 0
-            for key in keys:
-                timestamp_str = key.split(':')[1]
+            for key in list(self.client.scan_iter("stats:*")):
+                timestamp_str = key.split(":")[1]
                 if timestamp_str < cutoff_str:
                     self.client.delete(key)
                     deleted += 1
-            
+
             logger.info(f"Cleaned up {deleted} old stats entries")
         except Exception as e:
             logger.error(f"Failed to cleanup old data: {e}")

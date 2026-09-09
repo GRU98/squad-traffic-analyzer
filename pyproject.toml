@@ -1,0 +1,18 @@
+[tool.pytest.ini_options]
+pythonpath = ["app"]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+filterwarnings = ["error::DeprecationWarning:app", "ignore::DeprecationWarning"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = [".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM"]
+# B008: Depends()/File()/Query() в дефолтах — идиома FastAPI. UP042: StrEnum менять не нужно.
+ignore = ["E501", "B008", "UP042"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["analyzer", "anomaly_detector", "config", "database", "main", "models", "notifications", "pcap_parser", "redis_client", "scheduler"]
