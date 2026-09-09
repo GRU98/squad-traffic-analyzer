@@ -1,3 +1,5 @@
+.PHONY: up down restart logs logs-app status rebuild clean venv test lint fmt
+
 up:
 	docker compose -f docker/docker-compose.yml up -d --build
 
@@ -22,3 +24,19 @@ rebuild:
 
 clean:
 	docker compose -f docker/docker-compose.yml down -v
+
+# --- Local development (uses .venv) ---
+venv:
+	python3 -m venv .venv
+	.venv/bin/pip install -r requirements-dev.txt
+
+test:
+	.venv/bin/pytest -q
+
+lint:
+	.venv/bin/ruff check app tests
+	.venv/bin/ruff format --check app tests
+
+fmt:
+	.venv/bin/ruff format app tests
+	.venv/bin/ruff check --fix app tests

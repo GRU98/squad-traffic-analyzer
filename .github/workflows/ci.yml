@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev, "feature/**", "fix/**", "refactor/**", "chore/**"]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+      - name: Lint
+        run: |
+          ruff check app tests
+          ruff format --check app tests
+      - name: Test
+        run: pytest -q
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -f docker/Dockerfile -t squad-traffic-analyzer:ci .
+      - name: Smoke test /health
+        run: |
+          docker run -d --name app -p 8000:8000 -e DATABASE_URL=sqlite:////tmp/ci.db squad-traffic-analyzer:ci
+          for i in $(seq 1 30); do
+            curl -fs http://localhost:8000/health && exit 0
+            sleep 2
+          done
+          docker logs app
+          exit 1
