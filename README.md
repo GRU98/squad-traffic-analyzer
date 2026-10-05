@@ -14,7 +14,7 @@
 
 ---
 
-> **[🇬🇧 English](#english)** &nbsp;|&nbsp; **[🇷🇺 Русский](#русский)**
+> **[English](#english)** &nbsp;|&nbsp; **[Русский](#русский)**
 
 </div>
 
